@@ -1,7 +1,6 @@
-use crate::parser::cursor::Cursor;
+use crate::cursor::Cursor;
 
-mod cursor;
-
+#[derive(Debug, PartialEq, Eq)]
 pub enum ParserError {
     UnexpectedToken(char),
     UnexpectedEndOfInput,
@@ -11,8 +10,8 @@ pub enum ParserError {
 pub enum Ast {
     Empty,
     Literal(char),
-    Concat(Vec<Ast>),
-    Alternation(Vec<Ast>),
+    Concat(Box<Ast>, Box<Ast>),
+    Alternation(Box<Ast>, Box<Ast>),
     Star(Box<Ast>),
 }
 
@@ -27,42 +26,33 @@ pub fn parse(input: &str) -> Result<Ast, ParserError> {
 }
 
 fn parse_alternation(cursor: &mut Cursor) -> Result<Ast, ParserError> {
-    let mut nodes: Vec<Ast> = vec![];
-
-    let node = parse_concat(cursor)?;
-    nodes.push(node);
-
-    while cursor.eat('|') {
-        let node = parse_concat(cursor)?;
-        nodes.push(node);
+    let node1 = parse_concat(cursor)?;
+    if !cursor.eat('|') {
+        return Ok(node1);
     }
-    match nodes.len() {
-        0 => Ok(Ast::Empty),
-        1 => return Ok(nodes.pop().unwrap()),
-        _ => return Ok(Ast::Alternation(nodes)),
-    }
+    let node2 = parse_alternation(cursor)?;
+    return Ok(Ast::Alternation(Box::new(node1), Box::new(node2)));
 }
 
 fn parse_concat(cursor: &mut Cursor) -> Result<Ast, ParserError> {
-    let mut nodes: Vec<Ast> = vec![];
-
-    loop {
-        let next = cursor.peek();
-        let c = match next {
-            Some(c) => c,
-            None => break,
-        };
-        if c == ')' || c == '|' {
-            break;
-        }
-
-        let node = parse_star(cursor)?;
-        nodes.push(node);
+    let peak = cursor.peek();
+    match peak {
+        None => return Ok(Ast::Empty),
+        Some(')') | Some('|') => return Ok(Ast::Empty),
+        _ => {}
     }
-    match nodes.len() {
-        0 => Ok(Ast::Empty),
-        1 => return Ok(nodes.pop().unwrap()),
-        _ => return Ok(Ast::Concat(nodes)),
+    let node1 = parse_star(cursor)?;
+
+    let peak = cursor.peek();
+    let node2 = match peak {
+        None => Ast::Empty,
+        Some(')') | Some('|') => Ast::Empty,
+        _ => parse_concat(cursor)?,
+    };
+
+    match node2 {
+        Ast::Empty => Ok(node1),
+        _ => Ok(Ast::Concat(Box::new(node1), Box::new(node2))),
     }
 }
 

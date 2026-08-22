@@ -13,12 +13,12 @@ fn lit(c: char) -> Ast {
     Ast::Literal(c)
 }
 
-fn cat(children: Vec<Ast>) -> Ast {
-    Ast::Concat(children)
+fn cat(left: Ast, right: Ast) -> Ast {
+    Ast::Concat(Box::new(left), Box::new(right))
 }
 
-fn alt(branches: Vec<Ast>) -> Ast {
-    Ast::Alternation(branches)
+fn alt(left: Ast, right: Ast) -> Ast {
+    Ast::Alternation(Box::new(left), Box::new(right))
 }
 
 fn star(inner: Ast) -> Ast {
@@ -34,12 +34,12 @@ fn literal() {
 
 #[test]
 fn concat() {
-    assert_eq!(ast("ab"), cat(vec![lit('a'), lit('b')]));
+    assert_eq!(ast("ab"), cat(lit('a'), lit('b')));
 }
 
 #[test]
 fn alternation() {
-    assert_eq!(ast("a|b"), alt(vec![lit('a'), lit('b')]));
+    assert_eq!(ast("a|b"), alt(lit('a'), lit('b')));
 }
 
 #[test]
@@ -47,29 +47,20 @@ fn concat_binds_tighter_than_alternation() {
     // `(ab)|(cd)`, never `a(b|c)d` — the root must be the Alternation.
     assert_eq!(
         ast("ab|cd"),
-        alt(vec![
-            cat(vec![lit('a'), lit('b')]),
-            cat(vec![lit('c'), lit('d')]),
-        ])
+        alt(cat(lit('a'), lit('b')), cat(lit('c'), lit('d')))
     );
 }
 
 #[test]
 fn star_binds_to_the_single_preceding_atom() {
     // `a|(b(c*))` — the star takes `c` only, not `bc`.
-    assert_eq!(
-        ast("a|bc*"),
-        alt(vec![lit('a'), cat(vec![lit('b'), star(lit('c'))])])
-    );
+    assert_eq!(ast("a|bc*"), alt(lit('a'), cat(lit('b'), star(lit('c')))));
 }
 
 #[test]
 fn group_makes_an_expression_into_one_atom() {
     // The parens force the shape, then vanish: nothing records they were written.
-    assert_eq!(
-        ast("(a|b)*c"),
-        cat(vec![star(alt(vec![lit('a'), lit('b')])), lit('c')])
-    );
+    assert_eq!(ast("(a|b)*c"), cat(star(alt(lit('a'), lit('b'))), lit('c')));
 }
 
 #[test]
@@ -77,6 +68,22 @@ fn stacked_stars() {
     // `a**` is `(a*)*`. It must PARSE — it compiles to an NFA with an
     // epsilon-loop, a cycle consuming no input, which is the matcher's problem.
     assert_eq!(ast("a**"), star(star(lit('a'))));
+}
+
+#[test]
+fn concat_is_right_associative() {
+    // Nothing in the language cares — concatenation is associative, so
+    // `Concat(a, Concat(b, c))` and `Concat(Concat(a, b), c)` describe the same
+    // set of strings. But the binary node forces a choice, and the choice is
+    // now visible in the tree, so pin it down before the compiler starts
+    // depending on it.
+    assert_eq!(ast("abc"), cat(lit('a'), cat(lit('b'), lit('c'))));
+}
+
+#[test]
+fn alternation_is_right_associative() {
+    // Same argument as `abc`: `|` is associative, the node shape is not.
+    assert_eq!(ast("a|b|c"), alt(lit('a'), alt(lit('b'), lit('c'))));
 }
 
 // --- should error ----------------------------------------------------------
@@ -112,18 +119,21 @@ fn repetition_operator_with_no_atom() {
 // Three tests because the empty branch reaches `parse_alternation` by three
 // different routes: at EOF, at the very start of the loop, and between two
 // consecutive `|`. A parser can get one right and the others wrong.
+//
+// Now that the node is binary and right-associative, `a||b` nests: the second
+// branch of the outer Alternation is itself an Alternation.
 
 #[test]
 fn trailing_empty_branch() {
-    assert_eq!(ast("a|"), alt(vec![lit('a'), Ast::Empty]));
+    assert_eq!(ast("a|"), alt(lit('a'), Ast::Empty));
 }
 
 #[test]
 fn leading_empty_branch() {
-    assert_eq!(ast("|a"), alt(vec![Ast::Empty, lit('a')]));
+    assert_eq!(ast("|a"), alt(Ast::Empty, lit('a')));
 }
 
 #[test]
 fn empty_branch_between_two_alternatives() {
-    assert_eq!(ast("a||b"), alt(vec![lit('a'), Ast::Empty, lit('b')]));
+    assert_eq!(ast("a||b"), alt(lit('a'), alt(Ast::Empty, lit('b'))));
 }

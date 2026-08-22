@@ -1,3 +1,5 @@
+mod cursor;
+mod machine;
 mod parser;
 
 fn main() {

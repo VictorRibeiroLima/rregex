@@ -38,14 +38,14 @@ Both worth avoiding again:
 
 ## Established design decisions
 
-Locked in during Lesson 1. Don't relitigate these without being asked.
+Locked in during Lessons 1-2. Don't relitigate these without being asked.
 
 | Decision | Choice | Reasoning |
 |---|---|---|
 | Matching strategy | **Thompson NFA simulation** (Pike VM style) | Linear-time guarantee, teaches the automata theory properly. Accepts that backreferences become impossible. |
 | Alphabet | **`char`** (Unicode scalar values) | Simpler than bytes; `.` and ranges behave naturally. Revisit only if performance matters. |
 | Lexer | **None** | Regex tokens are single characters and context-sensitive (`]`, `-`, `^`, `*` all change meaning by position). A cursor over the chars, not a token stream. |
-| Concat / Alternation shape | **`Vec<Ast>`**, n-ary and flat | Both operators are associative, so binary nesting would encode an arbitrary grouping choice that carries no meaning. |
+| Concat / Alternation shape | **Binary** — `Concat(Box<Ast>, Box<Ast>)`, `Alternation(Box<Ast>, Box<Ast>)`. *Changed in Lesson 2; was n-ary `Vec<Ast>`.* | The n-ary argument (associativity makes grouping meaningless) is still true of the *language*, but the NFA needs a bounded fan-out: `Split` holds exactly two targets. Binary nodes put the fold in the parser, so `compile` maps one node to one instruction. Cost: right-recursion makes parser stack depth O(input length). |
 | Empty branches | **Permissive** (PCRE-style) — produce `Ast::Empty` rather than an error | |
 | `+` and `?` | Not implemented; currently rejected in `parse_atom` | Desugaring to `AA*` / `A\|ε` was discussed but not decided. |
 
@@ -119,13 +119,150 @@ The bottom level is named `atom`, not `literal`, because it also owns `(`.
   (~1.1M branches with `char`), so it gets its own node as a compression. It is
   the first member of the character-class family.
 
+### Lesson 2 — Thompson's construction (complete)
+
+**Built:** a compiler from `Ast` to a flat NFA program. All 24 tests green
+(16 parser, 8 machine).
+
+- [src/machine/mod.rs](src/machine/mod.rs) — `Instruction`, `Program`,
+  `Fragment`, `Machine::new`, and the five `compile_*` functions plus their tests
+
+**The AST changed.** `Concat` and `Alternation` became binary (see the decisions
+table). Victor made the change himself once he saw that an n-ary `Alternation`
+would compile to an n-way branch, which `Split` cannot hold. Two tests were added
+to pin the now-observable associativity (`abc`, `a|b|c` — both right-nested,
+following the right-recursive parser). Nothing in the *language* distinguishes
+the nestings; the tests exist because an untested arbitrary choice silently
+changes.
+
+**The representation, and why:**
+
+```
+State       = usize          an index; identifies a slot
+Instruction = the contents of a slot: what a finger standing here may do
+Program     = Vec<Instruction>
+Fragment    = { start: State, exit: State }
+```
+
+- **States are indices, not pointers.** Every `Star` creates a cycle, so a real
+  node graph means `Rc<RefCell<_>>`: reference cycles that never drop, runtime
+  borrows, and a fight with the borrow checker to look at both branches of a
+  split. Indices sidestep all three, and the whole program is one allocation.
+  This is what RE2, Go's `regexp`, and Rust's `regex` do.
+- **Four instructions, because fan-out is ≤ 2.** Only `Alternation` and `Star`
+  branch, and each creates exactly a 2-way choice, so an edge can be a fixed
+  field rather than a list. `Consume(char, State)`, `Jump(State)`,
+  `Split(State, State)`, `Match` — plus `Hole`, see below.
+- **State and instruction are the same object from two directions.** State is the
+  automata view (a dot); instruction is the VM view (a line of a program). Same
+  slot. This is why the matcher will be a loop with a program counter.
+- **The one line that partitions the enum:** `Consume` advances the input
+  position, `Jump`/`Split`/`Match` do not. Lesson 3 branches on exactly this.
+
+**Compile as push-and-patch:**
+
+Every fragment's `exit` is a **hole** — a real slot, pushed so it occupies an
+index, whose contents the *parent* overwrites later. Compilation is nothing but
+"push states, fill holes." `Instruction::Hole` is an explicit variant so an
+unfilled one is loud rather than silently pointing at slot 0.
+
+| Node | pushes | fills |
+|---|---|---|
+| `Empty` | 1 (a lone `Hole`; `start == exit`) | — |
+| `Literal(c)` | 2 (`Consume` + `Hole`) | — |
+| `Concat(A,B)` | **0** | A's hole ← `Jump(B.start)` |
+| `Alternation(A,B)` | 2 (`Split` + `Hole`) | both children's holes ← `Jump(exit)` |
+| `Star(A)` | 2 (`Split` + `Hole`) | A's hole ← `Jump(split)` |
+
+`Machine::new` fills the root's hole with `Match` — the one hole nobody else owns.
+
+**Concepts covered:**
+
+- An NFA is a directed graph plus a walking rule. Transitions are a *relation*,
+  not a function: multiple targets per char, plus ε-edges taken free.
+  Acceptance is existential — *some* path consumes the whole string.
+- **ε-transitions buy composability, not power.** The invariant *exactly one
+  start, exactly one accept; nothing enters the start, nothing leaves the accept*
+  makes a fragment a black box with one plug and one socket, so gluing is a
+  single ε-edge with no case analysis on what's inside. Without it, a fragment
+  carries a *set* of exits and every gadget grows loop-and-union bookkeeping.
+  One sentence: **ε-edges convert a set of exits into a single exit.**
+- The price is state count and ε-chasing; the payoff is a construction that is
+  linear in AST nodes and correct by a two-line induction. Linearity is what
+  makes the Lesson 3 guarantee (O(states × input)) worth anything.
+- **Failure is the absence of an arrow.** The transition relation is partial —
+  no dead state, no trap. In the matcher, a finger with no matching arrow is
+  dropped from the set.
+- **The machine answers exactly one question:** does *this whole string* belong
+  to the language? "`aaa` matches `a|b` three times" is a *search* concern — a
+  loop wrapped around the machine — as are unanchored matching and submatches.
+  Keep that boundary sharp.
+- Compile-time sees no input. `compile` never touches a string.
+- Recursion is **post-order**: children finish before parents, siblings left to
+  right. Sibling order is genuinely free (it only changes numbering), but going
+  left-to-right is what the `match` arms already read as.
+- **The start state is usually not index 0.** Indices follow creation order, and
+  branch nodes push their `Split` only after their children exist. `(a|b)*c`
+  starts at 6.
+- **Greedy vs lazy is the order of a `Split`'s two targets.** `Split(body, exit)`
+  prefers the body, which is what makes `*` greedy once Lesson 3 makes the first
+  branch preferred. `*?` will be that swap.
+- ε is **not a symbol**. `Consume('\0', _)` is not `Empty`: it would make `""`
+  fail to match and `"\0"` start matching, because in a `char` alphabet every
+  `char` occurs. `Empty` is the language `{""}`; `∅` is `{}` and the AST
+  deliberately cannot express it. (Kleene: ε is concat's identity, `∅` is
+  alternation's identity and concat's annihilator.)
+
+**Bugs that surfaced (all self-inflicted index arithmetic, all instructive):**
+
+- Returning an exit index for a slot that was never pushed. The next fragment
+  lands in that slot and the parent's patch **overwrites a real instruction**,
+  producing a silent ε self-loop instead of a crash. Rule: *a hole must occupy a
+  slot*; a fragment's `exit` must exist the moment the fragment returns.
+- `program.len()` after a push is the index of the *next* slot, not the one just
+  pushed. Same bug, one slot over. Rule: *the index of a slot is `len()` at the
+  moment you push it* — capture it before the push.
+- Reaching inside a child fragment when wiring. His first `a|b` merged the two
+  literals onto shared states, and his first `Star` added an edge from the
+  child's start straight to the child's accept. The second one creates a **pure
+  ε-cycle in a plain `(a|b)*`** — correct language, broken machine. Rule: a
+  gadget may use a child's `start` and `exit` as *two integers* and nothing else.
+- Wiring the outside of a `Concat` and leaving the seam disconnected, giving a
+  two-component graph that matches nothing. `Concat` pushes zero states; its
+  entire product is the seam edge.
+
+**Teaching notes for next time:**
+
+- He inverted sibling order twice ("compile the last child first"). Worth
+  re-checking if it recurs.
+- He reads a wiring line like `(5) ⇢ (6)` as a *description* of what the child
+  already does, rather than as a new edge being added. The fix that landed:
+  "start and exit are two integers you carry, not a promise of free travel."
+- Working the gadgets as hand-drawn diagrams **before** any Rust was what made it
+  stick. He then predicted each program slot-by-slot in a comment before writing
+  the arm, and every prediction was right. Keep this workflow.
+- Asserting the *whole* program slot by slot is the right test shape for a
+  compiler — it pins the numbering, which is what every index bug corrupts.
+
 **Known open items** (not bugs to fix unprompted — raise them when relevant):
 
 - `\` escapes are `todo!()` in `parse_atom`.
 - `.`, `+`, `?`, character classes, anchors, `{n,m}` — all unimplemented.
-- `a**` compiles to an NFA containing an **epsilon-loop**: a cycle consuming no
-  input. This is deliberately deferred to the matcher, and it is the single most
-  common bug in first-attempt engines. Flag it during Thompson's construction.
+- **The ε-loop is now built and visible, and it is Lesson 3's problem.** `a**`
+  compiles to slots `4: Split(2,5)`, `2: Split(0,3)`, `3: Jump(4)` — a cycle in
+  which nothing advances the input, so a finger can walk `4 → 2 → 3 → 4` forever.
+  The compiler is right to emit it; Thompson's construction is local and must not
+  reject a well-formed tree. The matcher fixes it by tracking which states it has
+  already added at the current input position. `stacked_stars_build_an_epsilon_loop`
+  documents the exact slots.
+- `Machine` has no matcher yet and its fields are private; nothing runs a string
+  through a program.
+- Parser stack depth is O(input length) after the switch to binary nodes; a long
+  literal run will overflow. Production engines cap nesting depth (`nest_limit`).
+- ε-only slots (`Jump`) are kept deliberately: they make the program match the
+  hand-drawn diagrams and are removable later by a peephole pass that does not
+  touch `compile`. Cox's dangling-out-pointer scheme avoids them and was
+  rejected for now on debuggability grounds.
 
 ## Protocol for agents
 
