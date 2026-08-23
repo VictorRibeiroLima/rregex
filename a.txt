@@ -66,7 +66,7 @@ read 'a'(current,input[1])
       state 2: Split — not a Consume       → contributes nothing
       state 0: Consume('a', 1), 'a' == 'a' → contribute 1
       state 3: Match, wall                  → contributes nothing
-    next = {1}
+    next = {1} <- the return of the step function
     traversal of next:
       closure: 1 is Jump(2)  → add 2
                2 is Split(0,3) — has ε-edges, not a wall. Add 2, follow both arms.

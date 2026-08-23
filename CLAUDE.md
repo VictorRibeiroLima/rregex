@@ -48,6 +48,7 @@ Locked in during Lessons 1-2. Don't relitigate these without being asked.
 | Concat / Alternation shape | **Binary** — `Concat(Box<Ast>, Box<Ast>)`, `Alternation(Box<Ast>, Box<Ast>)`. *Changed in Lesson 2; was n-ary `Vec<Ast>`.* | The n-ary argument (associativity makes grouping meaningless) is still true of the *language*, but the NFA needs a bounded fan-out: `Split` holds exactly two targets. Binary nodes put the fold in the parser, so `compile` maps one node to one instruction. Cost: right-recursion makes parser stack depth O(input length). |
 | Empty branches | **Permissive** (PCRE-style) — produce `Ast::Empty` rather than an error | |
 | `+` and `?` | Not implemented; currently rejected in `parse_atom` | Desugaring to `AA*` / `A\|ε` was discussed but not decided. |
+| State set | **Bitset** — `Vec<bool>` indexed by state, plus a cached `matched` flag. *Added in Lesson 3.* | States are dense (`< program.len()`), so membership is one indexed load; no hashing. Set and visited-marker are the same object, so they cannot drift apart. Cost: `step` scans all `n` slots rather than only the live ones — same O(n·m) bound. |
 
 Victor is comfortable in Rust. Skip language mechanics; stay on the algorithms.
 
@@ -248,21 +249,197 @@ unfilled one is loud rather than silently pointing at slot 0.
 
 - `\` escapes are `todo!()` in `parse_atom`.
 - `.`, `+`, `?`, character classes, anchors, `{n,m}` — all unimplemented.
-- **The ε-loop is now built and visible, and it is Lesson 3's problem.** `a**`
-  compiles to slots `4: Split(2,5)`, `2: Split(0,3)`, `3: Jump(4)` — a cycle in
-  which nothing advances the input, so a finger can walk `4 → 2 → 3 → 4` forever.
-  The compiler is right to emit it; Thompson's construction is local and must not
-  reject a well-formed tree. The matcher fixes it by tracking which states it has
-  already added at the current input position. `stacked_stars_build_an_epsilon_loop`
-  documents the exact slots.
-- `Machine` has no matcher yet and its fields are private; nothing runs a string
-  through a program.
+- **The ε-loop is built and visible.** `a**` compiles to slots `4: Split(2,5)`,
+  `2: Split(0,3)`, `3: Jump(4)` — a cycle in which nothing advances the input, so
+  a finger can walk `4 → 2 → 3 → 4` forever. The compiler is right to emit it;
+  Thompson's construction is local and must not reject a well-formed tree.
+  `stacked_stars_build_an_epsilon_loop` documents the exact slots. *Resolved in
+  Lesson 3* by the already-seen check in `follow`.
+- `Machine` has no matcher yet. *Resolved in Lesson 3* — `Regex` runs strings
+  through the program via `Machine::start()` and `Machine::program()`.
 - Parser stack depth is O(input length) after the switch to binary nodes; a long
   literal run will overflow. Production engines cap nesting depth (`nest_limit`).
 - ε-only slots (`Jump`) are kept deliberately: they make the program match the
   hand-drawn diagrams and are removable later by a peephole pass that does not
   touch `compile`. Cox's dangling-out-pointer scheme avoids them and was
   rejected for now on debuggability grounds.
+
+### Lesson 3 — the simulator (complete)
+
+**Built:** a Thompson NFA simulator (Pike VM shape, minus priority). All 37 tests
+green (16 parser, 8 machine, 13 matcher).
+
+- [src/regex/mod.rs](src/regex/mod.rs) — `Regex`, `SeenSet`, and the three
+  functions `step`, `closure`, `follow`, plus the matcher tests
+- [src/regex/error.rs](src/regex/error.rs) — `RegexError`, with
+  `From<ParserError>`
+- [src/machine/program.rs](src/machine/program.rs) — `Instruction`,
+  `ValidInstruction`, `Program`, `ValidProgram` (moved out of `machine/mod.rs`)
+
+**`ValidProgram` — the hole assertion became a type.** Lesson 2 ended with a
+runtime `assert!(!program.contains(&Hole))`. `ValidProgram::new` now consumes a
+`Program` and returns a `Vec<ValidInstruction>` — the same enum minus `Hole`. The
+matcher therefore `match`es four arms, not five, and there is no unreachable case
+to write. Illegal states made unrepresentable, at exactly the boundary where the
+program stops being under construction. Victor's own move; keep it.
+
+**The recurrence, which is the whole lesson:**
+
+```
+S_0     = closure({ start })
+S_{i+1} = closure( step( S_i, input[i] ) )
+accept iff Match ∈ S_final
+```
+
+`closure` appears in both lines, `step` only in the second — that asymmetry is
+why they are two functions. `closure` takes no character; a character is only
+needed to decide which `Consume`s survive, and at position 0 nothing has been
+consumed.
+
+**The representation:**
+
+```
+SeenSet = { seen: Vec<bool> indexed by state, matched: bool }
+```
+
+- The set and the visited-marker are **the same object**. `seen[s]` answers both
+  "is s in the set?" and "have I already added s during this closure?" — they can
+  never disagree.
+- `matched` is cached when `follow` visits a `Match`, so the final verdict is O(1)
+  instead of a scan. It is `false` at every new position because `step` builds a
+  fresh `SeenSet`; that must stay true if the allocation is ever reused.
+
+**Division of labour:**
+
+| fn | reads input? | job |
+|---|---|---|
+| `step` | yes | for each live `Consume(c, t)` with `c` == the char, contribute **`t`**. Everything else dies. Returns a fresh, *unclosed* set. |
+| `closure` | no | seeding loop: call `follow` on every state already in the set |
+| `follow` | no | the walk: `Jump`/`Split` → check-mark-recurse per target; `Consume`/`Match` → wall |
+
+**Concepts covered:**
+
+- **The set is the whole trick.** A `Split` does not create two sets; it puts two
+  states into the one set. Two sets would be two independent machines — that is
+  backtracking, and it is exponential. There is exactly one set alive at a time
+  (plus the `next` being filled).
+- **Simulation is subset construction done lazily.** A set of NFA states *is* a
+  DFA state; the simulator builds one at a time and throws it away. Same insight,
+  no exponential table.
+- **The invariant:** `S_i` = exactly the states reachable from `start` by some
+  path spelling the first *i* characters, where "reachable" always includes free
+  ε-travel. Position 0 is not a special case — it is that rule with *i* = 0,
+  which is why `S_0` needs a closure even though no input has been read.
+  Skipping it breaks every regex whose start state is a `Split` (`a|b` starts at
+  4, `a*` at 2, `(a|b)*c` at 6) and makes `a*` reject `""`.
+- **The set is a position, not a log.** It records where fingers stand, never
+  where they have been. `S_1 == S_2` for `a*` on `"aa"` is not a bug — it is a
+  loop at steady state.
+- **Lockstep.** One input pointer for the whole machine; every finger is always
+  at the same input position. The set has no way to express otherwise and never
+  needs to. Nothing ever rewinds — that is the linear-time guarantee.
+- **`|` splits the pattern, not the input.** Both branches are rivals for the
+  *same* character. Concatenation is the operator that divides the input between
+  two sub-patterns; alternation never lengthens the language, only widens it.
+- **The dedup check is termination, not validation.** Arriving at an
+  already-marked state is normal, expected, and load-bearing: it is the base case
+  of the walk. Every `Star` compiles to a cycle by construction, so a matcher
+  that treats a revisit as an error rejects every star. Chalk-marks in a maze:
+  you turn around, you do not declare the maze invalid.
+- The same check does two jobs at once, and they are the same fact: it terminates
+  ε-cycles, and it merges duplicate paths so the set is bounded by the number of
+  **states** rather than the number of **paths**. Paths vs. states is the whole
+  distance between ReDoS and O(n·m).
+- Which is also exactly why **backreferences are impossible**: the merge is sound
+  only because a finger's future depends on `(state, input position)` and nothing
+  else. `\1` would make history matter, and two fingers on one slot would stop
+  being interchangeable. The merge buys the speed and forbids the feature.
+- **Failure is the absence of an arrow**, in code: a non-matching `Consume` is
+  simply not copied into `next`. No dead state.
+- **The empty set is absorbing.** `step({}, c) = {}` for every `c`, so an early
+  `return false` is sound — an optimisation, not a correctness requirement.
+- **`Match` has no outgoing edges of any kind.** Closure walls on it; `step` has
+  no arm for it. A finger that lands on `Match` dies at the next character. So
+  the `Match ∈ S` test is made **once**, after the loop — never inside it.
+- **The machine answers membership, not search.** `ab` does not match `"abc"`;
+  `a|b` does not match `"ab"`. Search is a loop *around* this machine: try each
+  start offset and accept as soon as `Match` appears without requiring the input
+  to be exhausted. Keep the boundary sharp.
+- Order is free *today*: `step`'s result is a union of contributions, and union
+  is commutative, so scan order cannot change the answer. It stops being free in
+  Lesson 4.
+
+**Bugs that surfaced:**
+
+- `step` contributing `i` instead of `j` — parking the finger back on the
+  `Consume` it just executed. Rule: *what survives is where the arrow pointed,
+  not the instruction that pointed*. The unused-variable warning on `j` said so.
+- `let seen_set = self.step(...)` **inside** the `for` body — a new binding
+  scoped to the loop, dropped at the closing brace, so every character was
+  matched against `S_0` forever. Shadowing in a loop body always does this.
+- Writing `closure` as a **scan over the program** rather than a walk from a
+  given set: it marked every state with an incoming edge and never mentioned
+  `machine.start()`. A closure that does not read the start state cannot be
+  computing reachability from it. Diagnostic: a walk needs "reached but not yet
+  examined"; `for inst in program` has no such thing.
+- The first `closure` also built a fresh empty `next`, dropping its own input.
+  Rule: *closure only ever adds*; `closure(X) ⊇ X`. The walls it was discarding
+  were the entire answer.
+- `return Err(RegexError::StateLoop)` as the body of the already-seen check —
+  detecting the cycle correctly and then drawing the wrong conclusion from it.
+  Surfaced on `a|b|c` against `"b"`, where `follow(7)` was reached twice by two
+  different routes and there was no cycle at all.
+- `if seen[j1] || seen[j2]` on a `Split` — abandoning **both** arms because one
+  was seen. The arms are independent; a stale `j1` says nothing about a fresh
+  `j2`. (An intermediate `&&` version was correct but re-explored stale arms.)
+
+**Teaching notes for next time:**
+
+- The hand-traces did the work again. He wrote `S_0 … S_n` out slot by slot for
+  `ab`, `abc`, `a|b`, `a*` before touching Rust, and every
+  trace was mechanically correct. Keep this workflow; it is the third lesson in a
+  row where it was the thing that landed.
+- **The recurring misconception is anchoring, not automata.** He predicted a
+  match for `ab` vs `"abc"` and for `a|b` vs `"ab"`, twice, *after* correctly
+  tracing both to `false`. The mechanics were never the problem — the reading of
+  the pattern was. The fix that worked: enumerate the language as a literal list
+  of strings (`a|b → { "a", "b" }`) and count characters before tracing.
+- He needed "why does `S_0` exist at all?" answered from the invariant, not from
+  the code. Answer that landed: position 0 is the base case of the same rule, and
+  `a*` on `""` is the counterexample that makes it concrete.
+- He asked "how did `S_2` know the jump in `S_1` was taken?" — reading `step` as
+  consulting history. Answer that landed: **the fact lives in the contents of the
+  set, not in a flag.** State 2 being present *is* "the jump was followed."
+  Related: he assumed the visited marker persists across positions; the
+  counterexample is `a*` on `"aa"`, where state 0 must be added at every
+  position.
+- Direction of comparison confused him once: `step` iterates the *set* and asks
+  each `Consume` about the character, rather than pushing the character through
+  the program looking for a home.
+- Keep the two vocabularies apart — he mixed them repeatedly. **Wall** is a
+  closure word (no ε-edge to follow). **Dies** is a `step` word (no matching
+  arrow, not copied forward). Mixing them is a reliable early sign that the two
+  phases have blurred.
+
+**Known open items** (not bugs to fix unprompted — raise them when relevant):
+
+
+- `step` allocates a fresh `SeenSet` per character. The two lists should be
+  reused across positions (`clist`/`nlist` plus a swap). The stamp/generation
+  trick — store *when* a state was last added and compare against the current
+  position, instead of storing a `bool` and clearing `n` of them — was explained
+  and deliberately deferred until there is a benchmark that complains.
+- `follow` recurses per ε-edge, so stack depth is bounded by `program.len()`.
+  Same class of problem as the parser's O(input) depth.
+- `closure` scans `0..len` to find its seeds; `step` scans `0..len` to find live
+  states. Both are O(n) per character regardless of how few states are live. A
+  sparse set (RE2, Rust's `regex`) gives iteration proportional to the live set.
+- `Match` is found by `follow` visiting it, which relies on the caller having
+  marked the state first. The last trace of "marking lives in two places."
+- Still unimplemented: `\` escapes (`todo!()` in `parse_atom`), `.`, `+`, `?`,
+  character classes, anchors, `{n,m}`.
+- **No priority.** The set is unordered, so greedy vs. lazy is invisible and the
+  answer is a bare `bool`. This is Lesson 4's subject.
 
 ## Protocol for agents
 

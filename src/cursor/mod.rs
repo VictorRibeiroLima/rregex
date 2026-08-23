@@ -18,6 +18,7 @@ impl Cursor {
         Some(self.input[self.pos])
     }
 
+    #[allow(dead_code)]
     pub fn peek_at(&self, offset: usize) -> Option<char> {
         let pos = self.pos + offset;
         if pos >= self.input.len() {
@@ -26,6 +27,7 @@ impl Cursor {
         Some(self.input[pos])
     }
 
+    #[allow(dead_code)]
     pub fn rewind(&mut self, steps: usize) {
         if steps > self.pos {
             self.pos = 0;
@@ -34,6 +36,7 @@ impl Cursor {
         }
     }
 
+    #[allow(dead_code)]
     pub fn position(&self) -> usize {
         self.pos
     }

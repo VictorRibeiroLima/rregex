@@ -1,56 +1,10 @@
 use crate::parser::Ast::{self};
-use std::ops::Deref;
+use program::{Instruction as Inst, Program, ValidInstruction, ValidProgram};
+
+mod program;
 
 type State = usize;
-
-#[derive(Debug, PartialEq, Eq)]
-enum Instruction {
-    Hole,
-    Consume(char, State),
-    Jump(State),
-    Split(State, State),
-    Match,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum ValidInstruction {
-    Consume(char, State),
-    Jump(State),
-    Split(State, State),
-    Match,
-}
-
-type Program = Vec<Instruction>;
-
-pub struct ValidProgram {
-    program: Vec<ValidInstruction>,
-}
-
-impl ValidProgram {
-    fn new(program: Program) -> Result<Self, String> {
-        let mut valid_program = Vec::new();
-        for inst in program {
-            match inst {
-                Instruction::Hole => return Err("Program contains a hole".to_string()),
-                Instruction::Consume(c, s) => valid_program.push(ValidInstruction::Consume(c, s)),
-                Instruction::Jump(s) => valid_program.push(ValidInstruction::Jump(s)),
-                Instruction::Split(s1, s2) => valid_program.push(ValidInstruction::Split(s1, s2)),
-                Instruction::Match => valid_program.push(ValidInstruction::Match),
-            }
-        }
-        Ok(ValidProgram {
-            program: valid_program,
-        })
-    }
-}
-
-impl Deref for ValidProgram {
-    type Target = [ValidInstruction];
-
-    fn deref(&self) -> &Self::Target {
-        &self.program
-    }
-}
+pub type Instruction = ValidInstruction;
 
 struct Fragment {
     start: State,
@@ -66,7 +20,7 @@ impl Machine {
     pub fn new(ast: Ast) -> Self {
         let mut program = Program::new();
         let fragment = compile_fragment(&ast, &mut program);
-        program[fragment.exit] = Instruction::Match;
+        program[fragment.exit] = Inst::Match;
 
         let program = ValidProgram::new(program).expect("Program contains a hole");
         Self {
@@ -96,22 +50,22 @@ fn compile_fragment(ast: &Ast, program: &mut Program) -> Fragment {
 
 fn compile_empty(program: &mut Program) -> Fragment {
     let exit = program.len();
-    program.push(Instruction::Hole);
+    program.push(Inst::Hole);
     Fragment { start: exit, exit }
 }
 
 fn compile_literal(c: char, program: &mut Program) -> Fragment {
     let start = program.len();
-    program.push(Instruction::Consume(c, start + 1));
+    program.push(Inst::Consume(c, start + 1));
     let exit = program.len();
-    program.push(Instruction::Hole);
+    program.push(Inst::Hole);
     Fragment { start, exit }
 }
 
 fn compile_concat(left: &Ast, right: &Ast, program: &mut Program) -> Fragment {
     let left = compile_fragment(left, program);
     let right = compile_fragment(right, program);
-    program[left.exit] = Instruction::Jump(right.start);
+    program[left.exit] = Inst::Jump(right.start);
     Fragment {
         start: left.start,
         exit: right.exit,
@@ -122,13 +76,13 @@ fn compile_alternation(left: &Ast, right: &Ast, program: &mut Program) -> Fragme
     let left = compile_fragment(left, program);
     let right = compile_fragment(right, program);
 
-    program.push(Instruction::Split(left.start, right.start));
+    program.push(Inst::Split(left.start, right.start));
     let alt_start = program.len() - 1;
-    program.push(Instruction::Hole); //Here is where The "exit" will live
+    program.push(Inst::Hole); //Here is where The "exit" will live
     let alt_exit = program.len() - 1;
 
-    program[left.exit] = Instruction::Jump(alt_exit);
-    program[right.exit] = Instruction::Jump(alt_exit);
+    program[left.exit] = Inst::Jump(alt_exit);
+    program[right.exit] = Inst::Jump(alt_exit);
 
     Fragment {
         start: alt_start,
@@ -156,9 +110,9 @@ fn compile_star(ast: &Ast, program: &mut Program) -> Fragment {
     let start = program.len();
     let exit = start + 1;
 
-    program[frag.exit] = Instruction::Jump(start);
-    program.push(Instruction::Split(frag.start, exit));
-    program.push(Instruction::Hole);
+    program[frag.exit] = Inst::Jump(start);
+    program.push(Inst::Split(frag.start, exit));
+    program.push(Inst::Hole);
 
     Fragment { start, exit }
 }
@@ -166,7 +120,7 @@ fn compile_star(ast: &Ast, program: &mut Program) -> Fragment {
 #[cfg(test)]
 mod test {
     use crate::{
-        machine::{Instruction, Machine, ValidInstruction},
+        machine::{Machine, ValidInstruction},
         parser::{Ast, parse},
     };
 
