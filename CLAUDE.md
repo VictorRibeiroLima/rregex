@@ -49,6 +49,8 @@ Locked in during Lessons 1-2. Don't relitigate these without being asked.
 | Empty branches | **Permissive** (PCRE-style) — produce `Ast::Empty` rather than an error | |
 | `+` and `?` | Not implemented; currently rejected in `parse_atom` | Desugaring to `AA*` / `A\|ε` was discussed but not decided. |
 | State set | **Bitset** — `Vec<bool>` indexed by state, plus a cached `matched` flag. *Added in Lesson 3.* | States are dense (`< program.len()`), so membership is one indexed load; no hashing. Set and visited-marker are the same object, so they cannot drift apart. Cost: `step` scans all `n` slots rather than only the live ones — same O(n·m) bound. |
+| Thread ordering | **Ordered list beside the bitset** — `traversed: Vec<State>`, appended in `follow`'s DFS order; rank *is* the index. *Added in Lesson 4; replaced the `matched` flag.* | Leftmost-first (Perl) semantics need the backtracker's search order, and the bitset has none. The bitset keeps O(1) dedup; a `contains()` scan would make closure quadratic. Bonus: `step` now iterates the live list instead of scanning `0..len`. |
+| Match semantics | **Leftmost-first**, not POSIX leftmost-longest | It is what every mainstream engine does and what intuition expects. `Split(body, exit)` order is greediness; the swap is `*?`. |
 
 Victor is comfortable in Rust. Skip language mechanics; stay on the algorithms.
 
@@ -439,7 +441,244 @@ SeenSet = { seen: Vec<bool> indexed by state, matched: bool }
 - Still unimplemented: `\` escapes (`todo!()` in `parse_atom`), `.`, `+`, `?`,
   character classes, anchors, `{n,m}`.
 - **No priority.** The set is unordered, so greedy vs. lazy is invisible and the
-  answer is a bare `bool`. This is Lesson 4's subject.
+  answer is a bare `bool`. This is Lesson 4's subject. *Resolved in Lesson 4.*
+
+### Lesson 4 — priority (complete)
+
+**Built:** a priority-ordered simulation — the Pike VM shape, minus captures.
+`find` returns an end offset instead of a `bool`. All 45 tests green (16 parser,
+8 machine, 8 find, 13 full_match).
+
+- [src/regex/mod.rs](src/regex/mod.rs) — `SeenSet` gains `traversed`; `find`,
+  `full_match`, `is_match`
+- [src/regex/tests/find.rs](src/regex/tests/find.rs),
+  [src/regex/tests/full_match.rs](src/regex/tests/full_match.rs) — the matcher
+  tests, split by which question they ask
+
+**Why the answer had to stop being a `bool`.** Acceptance is existential, so
+`bool` throws away *which* accepting path was found. The moment the answer
+carries data — an offset, later a span or a capture — the paths disagree and a
+tie-breaking rule is required. `a*` on `"aaa"` has four accepting walks; `a|ab`
+and `ab|a` describe the same language and must give different answers.
+
+**The two schools.** POSIX is leftmost-**longest**, defined declaratively.
+Perl/PCRE/Python/JS/Rust are leftmost-**first**, defined *operationally* by a
+backtracker's search order: leftmost start, first alternative before second, loop
+before exit. This engine implements leftmost-first, which is what "greedy" means
+— not "longest", but "the loop branch is attempted first".
+
+**The trick, which is the whole lesson.** Perl semantics are defined by a DFS
+this engine refuses to perform. You recover the backtracker's *answer* without
+the backtracker by making the set an **ordered list**, appended in the order
+`follow`'s recursion visits states. Then the Lesson 3 dedup check becomes the
+tie-breaker for free: first arrival wins, and first arrival is the
+highest-priority path. The check that bought termination and linear time now also
+buys Perl semantics.
+
+> A backtracker never **creates** the losing thread. The Pike VM creates it, runs
+> it, and **cuts** it. That is why the work per character stays bounded.
+
+**The representation:**
+
+```
+SeenSet = { seen: Vec<bool>, traversed: Vec<State> }
+```
+
+- `seen` — unchanged job: O(1) membership, cycle termination, path merging.
+- `traversed` — the ordered list. **Rank is the index**; nothing stores it.
+- They are not one set with two hats. The bitmap marks *every* state visited,
+  ε-states included; the list holds only what can still be there when the next
+  character arrives.
+
+**`traversed` carries two different things at two moments** — this was the single
+biggest source of confusion, so name the phases:
+
+| moment | contents | written by |
+|---|---|---|
+| after `find`'s start / after `step` | **seeds** — raw targets, `Jump`/`Split` allowed | `find`, `step` |
+| after `closure` | **walls** — `Consume`/`Match` only, ranked | `follow` |
+
+`closure` therefore *rebuilds* the list rather than appending to it (it must drop
+the ε-seeds), while the bitmap only ever grows. Each phase must have exactly one
+writer — two writers is what produced every duplicate-entry bug below.
+
+**Where the answer is recorded:** while `step` reads the list.
+
+```
+walking clist at position i:
+   Consume(c,t) matching → contribute t
+   Match                 → result = Some(i), stop reading the list
+```
+
+And the asymmetry that makes greedy work: a `Match` cuts every thread **below it
+in the current list** (they lose the tie now), but not threads already carried
+forward from higher-ranked ancestors (they outrank it and may overwrite the
+recorded offset later). `a*` on `"ab"` records `Some(0)` then `Some(1)`; the
+climb *is* greediness.
+
+**API shape:**
+
+```
+find       -> Option<usize>    end offset, exclusive; match is input[0..n]
+full_match -> bool             find(input) == Some(input.chars().count())
+```
+
+`Some(0)` is a real match (the empty string) and is not `None`. Leftover input is
+no longer failure — `find("ab", "abc") == Some(2)`.
+
+**Concepts covered:**
+
+- **Three different bools.** `fullmatch` (whole string), Python's `re.match`
+  (prefix — what `find(..).is_some()` gives), and `is_match`/`.test()`
+  (substring, needs the search loop). Libraries ship several; they are different
+  questions, not different engines.
+- **`is_match` never needs priority.** `is_some()` does not care which path won,
+  so the bool API is exactly the Lesson 3 machine. That is why real engines keep
+  a fast lane (RE2 and Rust's `regex` run a DFA for `is_match` and only fall back
+  to the Pike VM when offsets or groups are wanted). The bool did not disappear;
+  it stopped being the primitive and became the thing you throw information away
+  to get.
+- **Greedy vs lazy is one field swap.** `Split(body, exit)` vs `Split(exit,
+  body)`. Same states, same language, different rank order. `*?` costs one line
+  in `compile` and nothing in the matcher — once the parser can say it.
+- **The list is not a stack.** It is built *by* a stack (`follow`'s recursion)
+  and read front-to-back. LIFO inverts every rank, i.e. turns every quantifier
+  lazy. If `follow`'s recursion is ever flattened into an explicit stack, push
+  `Split`'s targets **y then x** so `x` pops first.
+- **Priority is not history.** A thread's rank is its current position in the
+  list, not a record of its route. If rank required remembering the path the
+  merge would be unsound and the engine exponential — the same argument that
+  forbids backreferences.
+- **`Match` has no outgoing edges of any kind**, so it is never copied into
+  `next`. Carrying it forward keeps the list non-empty and lets the result be
+  overwritten at every later position.
+- **The empty list records nothing.** Emptiness means every thread died — the
+  opposite of a match. It is a valid early break (the empty set is absorbing),
+  never a signal.
+- **The final list must be read after the loop.** A match ending at end-of-input
+  leaves `Match` in the last list with no character to trigger a read.
+- Search is still a loop *around* this machine. `(start, end)` pairs are a
+  restart loop over offsets — correct, but O(n²·m), and it needs the empty-match
+  guard (`if end == start`, advance one) and a non-overlapping convention.
+  Recovering linear time means the implicit low-priority `.*?` prefix, which
+  requires threads to carry their start offset — i.e. the same machinery as
+  captures. That is the next lesson.
+
+**Bugs that surfaced:**
+
+- **`closure` dropped its own seeds from the list.** `rebuild` empties the list,
+  `follow` only pushes *targets*, and a seed is already marked so `insert`
+  refuses it. Pattern `a`: `S_0 = ({0}, [])` — the only live thread vanished
+  before the first character. Rule: `closure(X) ⊇ X` applies to the **list**, not
+  just the bitmap. The confusing part: seeds that are ε-states are *supposed* to
+  disappear, so the bug is invisible in every trace whose seeds are all `Jump`s.
+- **Pushing unconditionally in `insert`** (before the seen check) to fix the
+  above. Doesn't fix it — the seed is never re-inserted — and introduces
+  duplicates: `a|a` on `"a"` gives `[5, 5]`, two threads on one state, which is
+  exactly the merge the dedup check exists to perform.
+- **`traverse(i)` in the `Jump`/`Split` arms of `follow`.** Puts ε-states in the
+  list, and the `Split` arm pushes `i` twice when both arms are new.
+- **`result = Some(i)` when the list went empty.** `"a"` on `"b"` returned
+  `Some(0)` — a zero-length match for a pattern that cannot match the empty
+  string — and `"a"` on `"a"` returned `None`, because the loop was the only
+  reader.
+- **`step` copying `Match` into `next`.** `a|b` on `"abc"` returned `Some(2)`:
+  the list never emptied, `Match` was re-read at every later position, and each
+  read overwrote the correct `Some(1)`.
+- **`'\0'` as an end-of-input sentinel** for the final read. Worked by accident
+  (the `Match` arm returns before any comparison) but `'\0'` is a real `char` in
+  this alphabet — the same trap as `Consume('\0', _)` vs `Empty` in Lesson 2.
+  Replaced by `is_match`, which takes no character.
+
+**Teaching notes for next time:**
+
+- **`a|b` on `"ab"` is a bad worked example for this lesson** and cost a lot of
+  time: the `Match` read and the list going empty happen at the same moment, so
+  the trace cannot show which one produces the answer. Victor said, correctly,
+  that it contradicted the explanation. The discriminating pair is `"a"` on `"b"`
+  (list empties, no match) and `"a"` on `"a"` (match, list never empties).
+  `a*` on `"ab"` is the best single trace — it shows the record, the overwrite,
+  and an empty list that records nothing.
+- The recurring question was **"which structure holds what, and who writes it"**,
+  not the automata. What landed was the two-phase table (seeds vs walls) plus
+  "each phase has exactly one writer". Expect to draw it again when threads start
+  carrying capture slots.
+- "Why keep the bitmap at all?" — answer that landed: two jobs, and the dedup
+  check is the innermost operation in the engine, so it must be O(1). A
+  `list.contains()` scan makes closure quadratic and pays for the linear-time
+  guarantee twice.
+- "Ordered set" almost went to a sorted container. Sorted-by-state-index is not
+  priority order; in `a|ab` it puts `Match` *below* the `b` thread and flips the
+  answer. What is needed is **insertion order following DFS**.
+- Hand-traces did the work for the fourth lesson running. He now writes them as
+  `({bitmap}, [list])` pairs; keep that notation.
+- Vocabulary still leaks: he wrote "`Match` → wall, stop" inside `step`. **Wall**
+  is a closure word, **dies** is a `step` word, and in `step` a `Match` is
+  neither — it is a **record**.
+
+**Known open items** (not bugs to fix unprompted — raise them when relevant):
+
+- **Lazy quantifiers are unobservable.** The matcher is ready; the parser cannot
+  say `*?`. Grammar shape discussed: `repetition := atom QUANT*` with
+  `QUANT := ('*' | '+' | '?') '?'?` — the trailing `?` is the lazy flag and may
+  only follow a quantifier, never a bare atom. Note `a?` (a quantifier) and `a*?`
+  (a modifier on a quantifier) are different grammar objects sharing a character.
+- **`full_match` is wrong, and there is a red test for it**
+  (`a_higher_priority_short_branch_must_not_hide_a_full_match`). It is derived as
+  `find(input) == Some(len)`, but `find` applies the cut: on `a|ab` vs `"ab"` the
+  rank-0 `Match` records `Some(1)` and kills the thread that would have reached
+  `Some(2)`, so a string that *is* in the language is rejected. Deriving
+  membership from a leftmost-**first** search is only sound if the search were
+  leftmost-**longest**. `full_match` needs the Lesson 3 question instead —
+  consume the whole input with no early record and no cut, then ask whether
+  `Match` is in the final closed set. Victor left this deliberately unfixed to
+  think about; do not fix it unprompted.
+- Unanchored search, `(start, end)` spans, and capture groups — one subject
+  rather than three, deferred to after Lesson 5.
+- `find` is O(n·m); a restart loop for search is O(n²·m).
+- `step` still allocates a fresh `SeenSet` per character; the stamp/generation
+  trick and clist/nlist reuse are still deferred until a benchmark complains.
+  `std::mem::take` in `rebuild` is the first step toward it.
+- `follow` still recurses per ε-edge; stack depth bounded by `program.len()`.
+- Still unimplemented: `\` escapes (`todo!()` in `parse_atom`), `.`, `+`, `?`,
+  character classes, anchors, `{n,m}`. *This is Lesson 5.*
+
+### Lesson 5 — finishing the syntax (next)
+
+**Decided at the end of Lesson 4.** The engine's *machinery* is ahead of its
+*notation*: the matcher can already express lazy, but the parser cannot say
+`*?`, and none of `+`, `?`, `.`, escapes, or character classes exist. Lesson 5
+closes that gap. It is deliberately the small lesson — mostly parser and
+compiler work, little new theory.
+
+Chosen over the capture-groups lesson for one reason: **it is the proof that
+Lesson 4 works.** `a*?` returning `Some(0)` where `a*` returns `Some(3)` is the
+observable consequence of the ordered list, and right now nothing in the test
+suite can demonstrate it.
+
+Scope, roughly in dependency order:
+
+- `+` and `?` — pure desugaring, the decision left open since Lesson 1
+  (`A+ → AA*`, `A? → A|ε`). Note desugaring `A+` duplicates the sub-AST; whether
+  to desugar in the parser or add compile arms is the real question.
+- `*?`, `+?`, `??` — the lazy flag. Grammar shape already discussed:
+  `repetition := atom QUANT*` with `QUANT := ('*' | '+' | '?') '?'?`. The
+  trailing `?` may only follow a quantifier, never a bare atom; `a?` (a
+  quantifier) and `a*?` (a modifier on a quantifier) are different grammar
+  objects sharing a character. Compiles to swapped `Split` fields and nothing
+  else.
+- `.` — already established in Lesson 1 as its own node, a compression of an
+  alternation over the whole alphabet, and the first member of the
+  character-class family.
+- `\` escapes — the `todo!()` in `parse_atom`.
+- Character classes `[abc]`, `[a-z]`, `[^a]` — where the cursor-not-lexer
+  decision from Lesson 1 earns itself, since `]`, `-`, and `^` all change
+  meaning by position.
+
+Open design question to raise when it comes up: `Consume(char, State)` holds a
+single `char`. A class is a *set* of chars, so either the instruction grows a
+predicate/set variant or classes compile to alternation chains (correct but
+`n` states per class).
 
 ## Protocol for agents
 

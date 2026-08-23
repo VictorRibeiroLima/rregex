@@ -3,7 +3,7 @@ use program::{Instruction as Inst, Program, ValidInstruction, ValidProgram};
 
 mod program;
 
-type State = usize;
+pub type State = usize;
 pub type Instruction = ValidInstruction;
 
 struct Fragment {
