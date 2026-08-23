@@ -1,10 +1,19 @@
 use crate::parser::Ast::{self};
+use std::ops::Deref;
 
 type State = usize;
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum Instruction {
+enum Instruction {
     Hole,
+    Consume(char, State),
+    Jump(State),
+    Split(State, State),
+    Match,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ValidInstruction {
     Consume(char, State),
     Jump(State),
     Split(State, State),
@@ -13,6 +22,36 @@ pub enum Instruction {
 
 type Program = Vec<Instruction>;
 
+pub struct ValidProgram {
+    program: Vec<ValidInstruction>,
+}
+
+impl ValidProgram {
+    fn new(program: Program) -> Result<Self, String> {
+        let mut valid_program = Vec::new();
+        for inst in program {
+            match inst {
+                Instruction::Hole => return Err("Program contains a hole".to_string()),
+                Instruction::Consume(c, s) => valid_program.push(ValidInstruction::Consume(c, s)),
+                Instruction::Jump(s) => valid_program.push(ValidInstruction::Jump(s)),
+                Instruction::Split(s1, s2) => valid_program.push(ValidInstruction::Split(s1, s2)),
+                Instruction::Match => valid_program.push(ValidInstruction::Match),
+            }
+        }
+        Ok(ValidProgram {
+            program: valid_program,
+        })
+    }
+}
+
+impl Deref for ValidProgram {
+    type Target = [ValidInstruction];
+
+    fn deref(&self) -> &Self::Target {
+        &self.program
+    }
+}
+
 struct Fragment {
     start: State,
     exit: State,
@@ -20,7 +59,7 @@ struct Fragment {
 
 pub struct Machine {
     start: State,
-    program: Program,
+    program: ValidProgram,
 }
 
 impl Machine {
@@ -29,14 +68,19 @@ impl Machine {
         let fragment = compile_fragment(&ast, &mut program);
         program[fragment.exit] = Instruction::Match;
 
-        assert!(
-            !program.contains(&Instruction::Hole),
-            "compile_fragment left a hole in the program: {program:?} {ast:?}"
-        );
+        let program = ValidProgram::new(program).expect("Program contains a hole");
         Self {
             start: fragment.start,
             program,
         }
+    }
+
+    pub fn start(&self) -> State {
+        self.start
+    }
+
+    pub fn program(&self) -> &ValidProgram {
+        &self.program
     }
 }
 
@@ -122,7 +166,7 @@ fn compile_star(ast: &Ast, program: &mut Program) -> Fragment {
 #[cfg(test)]
 mod test {
     use crate::{
-        machine::{Instruction, Machine},
+        machine::{Instruction, Machine, ValidInstruction},
         parser::{Ast, parse},
     };
 
@@ -135,7 +179,7 @@ mod test {
         let machine = Machine::new(ast);
         assert_eq!(machine.start, 0);
         assert_eq!(machine.program.len(), 1);
-        assert_eq!(machine.program[0], Instruction::Match);
+        assert_eq!(machine.program[0], ValidInstruction::Match);
     }
 
     #[test]
@@ -145,10 +189,10 @@ mod test {
         let machine = Machine::new(ast);
         assert_eq!(machine.start, 0);
         assert_eq!(machine.program.len(), 4);
-        assert_eq!(machine.program[0], Instruction::Consume('a', 1));
-        assert_eq!(machine.program[1], Instruction::Jump(2));
-        assert_eq!(machine.program[2], Instruction::Consume('b', 3));
-        assert_eq!(machine.program[3], Instruction::Match);
+        assert_eq!(machine.program[0], ValidInstruction::Consume('a', 1));
+        assert_eq!(machine.program[1], ValidInstruction::Jump(2));
+        assert_eq!(machine.program[2], ValidInstruction::Consume('b', 3));
+        assert_eq!(machine.program[3], ValidInstruction::Match);
     }
 
     #[test]
@@ -176,12 +220,12 @@ mod test {
         let machine = Machine::new(ast);
         assert_eq!(machine.start, 4);
         assert_eq!(machine.program.len(), 6);
-        assert_eq!(machine.program[0], Instruction::Consume('a', 1));
-        assert_eq!(machine.program[1], Instruction::Jump(5));
-        assert_eq!(machine.program[2], Instruction::Consume('b', 3));
-        assert_eq!(machine.program[3], Instruction::Jump(5));
-        assert_eq!(machine.program[4], Instruction::Split(0, 2));
-        assert_eq!(machine.program[5], Instruction::Match);
+        assert_eq!(machine.program[0], ValidInstruction::Consume('a', 1));
+        assert_eq!(machine.program[1], ValidInstruction::Jump(5));
+        assert_eq!(machine.program[2], ValidInstruction::Consume('b', 3));
+        assert_eq!(machine.program[3], ValidInstruction::Jump(5));
+        assert_eq!(machine.program[4], ValidInstruction::Split(0, 2));
+        assert_eq!(machine.program[5], ValidInstruction::Match);
     }
 
     #[test]
@@ -201,11 +245,11 @@ mod test {
         let machine = Machine::new(ast);
         assert_eq!(machine.start, 3);
         assert_eq!(machine.program.len(), 5);
-        assert_eq!(machine.program[0], Instruction::Consume('a', 1));
-        assert_eq!(machine.program[1], Instruction::Jump(4));
-        assert_eq!(machine.program[2], Instruction::Jump(4));
-        assert_eq!(machine.program[3], Instruction::Split(0, 2));
-        assert_eq!(machine.program[4], Instruction::Match);
+        assert_eq!(machine.program[0], ValidInstruction::Consume('a', 1));
+        assert_eq!(machine.program[1], ValidInstruction::Jump(4));
+        assert_eq!(machine.program[2], ValidInstruction::Jump(4));
+        assert_eq!(machine.program[3], ValidInstruction::Split(0, 2));
+        assert_eq!(machine.program[4], ValidInstruction::Match);
     }
 
     #[test]
@@ -223,9 +267,9 @@ mod test {
         let machine = Machine::new(ast);
         assert_eq!(machine.start, 0);
         assert_eq!(machine.program.len(), 3);
-        assert_eq!(machine.program[0], Instruction::Jump(1));
-        assert_eq!(machine.program[1], Instruction::Consume('a', 2));
-        assert_eq!(machine.program[2], Instruction::Match);
+        assert_eq!(machine.program[0], ValidInstruction::Jump(1));
+        assert_eq!(machine.program[1], ValidInstruction::Consume('a', 2));
+        assert_eq!(machine.program[2], ValidInstruction::Match);
     }
 
     #[test]
@@ -248,10 +292,10 @@ mod test {
         let machine = Machine::new(ast);
         assert_eq!(machine.start, 2);
         assert_eq!(machine.program.len(), 4);
-        assert_eq!(machine.program[0], Instruction::Consume('a', 1));
-        assert_eq!(machine.program[1], Instruction::Jump(2));
-        assert_eq!(machine.program[2], Instruction::Split(0, 3));
-        assert_eq!(machine.program[3], Instruction::Match);
+        assert_eq!(machine.program[0], ValidInstruction::Consume('a', 1));
+        assert_eq!(machine.program[1], ValidInstruction::Jump(2));
+        assert_eq!(machine.program[2], ValidInstruction::Split(0, 3));
+        assert_eq!(machine.program[3], ValidInstruction::Match);
     }
 
     #[test]
@@ -274,16 +318,16 @@ mod test {
         let machine = Machine::new(ast);
         assert_eq!(machine.start, 6);
         assert_eq!(machine.program.len(), 10);
-        assert_eq!(machine.program[0], Instruction::Consume('a', 1));
-        assert_eq!(machine.program[1], Instruction::Jump(5));
-        assert_eq!(machine.program[2], Instruction::Consume('b', 3));
-        assert_eq!(machine.program[3], Instruction::Jump(5));
-        assert_eq!(machine.program[4], Instruction::Split(0, 2));
-        assert_eq!(machine.program[5], Instruction::Jump(6));
-        assert_eq!(machine.program[6], Instruction::Split(4, 7));
-        assert_eq!(machine.program[7], Instruction::Jump(8));
-        assert_eq!(machine.program[8], Instruction::Consume('c', 9));
-        assert_eq!(machine.program[9], Instruction::Match);
+        assert_eq!(machine.program[0], ValidInstruction::Consume('a', 1));
+        assert_eq!(machine.program[1], ValidInstruction::Jump(5));
+        assert_eq!(machine.program[2], ValidInstruction::Consume('b', 3));
+        assert_eq!(machine.program[3], ValidInstruction::Jump(5));
+        assert_eq!(machine.program[4], ValidInstruction::Split(0, 2));
+        assert_eq!(machine.program[5], ValidInstruction::Jump(6));
+        assert_eq!(machine.program[6], ValidInstruction::Split(4, 7));
+        assert_eq!(machine.program[7], ValidInstruction::Jump(8));
+        assert_eq!(machine.program[8], ValidInstruction::Consume('c', 9));
+        assert_eq!(machine.program[9], ValidInstruction::Match);
     }
 
     #[test]
@@ -310,11 +354,11 @@ mod test {
         let machine = Machine::new(ast);
         assert_eq!(machine.start, 4);
         assert_eq!(machine.program.len(), 6);
-        assert_eq!(machine.program[0], Instruction::Consume('a', 1));
-        assert_eq!(machine.program[1], Instruction::Jump(2));
-        assert_eq!(machine.program[2], Instruction::Split(0, 3));
-        assert_eq!(machine.program[3], Instruction::Jump(4));
-        assert_eq!(machine.program[4], Instruction::Split(2, 5));
-        assert_eq!(machine.program[5], Instruction::Match);
+        assert_eq!(machine.program[0], ValidInstruction::Consume('a', 1));
+        assert_eq!(machine.program[1], ValidInstruction::Jump(2));
+        assert_eq!(machine.program[2], ValidInstruction::Split(0, 3));
+        assert_eq!(machine.program[3], ValidInstruction::Jump(4));
+        assert_eq!(machine.program[4], ValidInstruction::Split(2, 5));
+        assert_eq!(machine.program[5], ValidInstruction::Match);
     }
 }
