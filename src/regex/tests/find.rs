@@ -87,6 +87,60 @@ fn dot_between_literals_requires_exactly_one_character() {
 }
 
 #[test]
+fn plus_requires_at_least_one_repetition_then_is_greedy() {
+    // Unlike '*', the empty string is never a match -- the entry point is
+    // the child's own start, not a Split that can skip it.
+    assert_eq!(find("a+", ""), None);
+    assert_eq!(find("a+", "b"), None);
+    assert_eq!(find("a+", "a"), Some(1));
+    assert_eq!(find("a+", "aaa"), Some(3));
+    assert_eq!(find("a+", "aaab"), Some(3));
+}
+
+#[test]
+fn the_loop_thread_and_the_exit_thread_both_stay_alive_for_plus() {
+    // Same coexistence property as a*a, just shifted by the one mandatory 'a'
+    // that '+' forces before the Split is even reached.
+    assert_eq!(find("a+a", "a"), None); // the mandatory 'a' has nothing left for the trailing literal
+    assert_eq!(find("a+a", "aa"), Some(2));
+    assert_eq!(find("a+a", "aaaa"), Some(4));
+}
+
+#[test]
+fn find_through_a_plus_of_an_alternation() {
+    assert_eq!(find("(a|b)+", "ababc"), Some(4));
+    assert_eq!(find("(a|b)+", "c"), None);
+}
+
+#[test]
+fn question_operator_matches_zero_or_one() {
+    assert_eq!(find("a?", ""), Some(0));
+    assert_eq!(find("a?", "a"), Some(1));
+    assert_eq!(find("a?", "aa"), Some(1));
+    assert_eq!(find("a?", "b"), Some(0));
+}
+
+#[test]
+fn the_optional_thread_and_the_mandatory_thread_both_stay_alive() {
+    // "a?a" -- taking the optional 'a' and skipping it are both live threads.
+    // On a single 'a', the greedy (take-it) thread runs out of input for the
+    // trailing mandatory 'a' and dies; the skip thread survives and matches.
+    // On "aa" the greedy thread also reaches Match, one position later, and
+    // overwrites the recorded offset -- same climb as star_is_greedy.
+    assert_eq!(find("a?a", "a"), Some(1));
+    assert_eq!(find("a?a", "aa"), Some(2));
+    assert_eq!(find("a?a", ""), None);
+}
+
+#[test]
+fn find_through_a_question_of_an_alternation() {
+    assert_eq!(find("(a|b)?c", "c"), Some(1));
+    assert_eq!(find("(a|b)?c", "ac"), Some(2));
+    assert_eq!(find("(a|b)?c", "bc"), Some(2));
+    assert_eq!(find("(a|b)?c", "xc"), None);
+}
+
+#[test]
 fn find_through_a_star_of_an_alternation() {
     assert_eq!(find("(a|b)*c", "c"), Some(1));
     assert_eq!(find("(a|b)*c", "bbabc"), Some(5));

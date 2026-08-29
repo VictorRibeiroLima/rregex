@@ -45,8 +45,8 @@ fn compile_fragment(ast: &Ast, program: &mut Program) -> Fragment {
         Ast::Concat(left, right) => compile_concat(left, right, program),
         Ast::Alternation(left, right) => compile_alternation(left, right, program),
         Ast::Star(ast) => compile_star(ast, program),
-        Ast::Plus(_) => todo!("Plus operator is not implemented yet"),
-        Ast::Question(_) => todo!("Question operator is not implemented yet"),
+        Ast::Plus(ast) => compile_plus(ast, program),
+        Ast::Question(ast) => compile_question(ast, program),
         Ast::Any => compile_any(program),
     }
 }
@@ -117,6 +117,53 @@ fn compile_star(ast: &Ast, program: &mut Program) -> Fragment {
     program.push(Inst::Split(frag.start, exit));
     program.push(Inst::Hole);
 
+    Fragment { start, exit }
+}
+
+fn compile_plus(ast: &Ast, program: &mut Program) -> Fragment {
+    let frag = compile_fragment(ast, program);
+    /*
+    "a+"
+    programLen = 0
+    (0) --a---> (1)
+    programLen = 2
+    program[1] = Split(0,2)
+    program[2]= Hole
+
+    (1) -> (0)
+    (1) -> (2)
+
+    start=0 exit =2
+     */
+    let start = frag.start;
+    let exit = program.len();
+    program[frag.exit] = Inst::Split(start, exit);
+    program.push(Inst::Hole);
+
+    Fragment { start, exit }
+}
+
+fn compile_question(ast: &Ast, program: &mut Program) -> Fragment {
+    let frag = compile_fragment(ast, program);
+    /*
+    "a?"
+    programLen = 0
+    (0) --a---> (1)
+    programLen = 2
+
+    program[2] = Split(0,3)
+    program[3]= Hole
+
+    (2) -> (0)
+    (2) -> (3)
+    (1) -> (3)
+
+    start=2 exit =3
+     */
+    let start = program.len();
+    let exit = frag.exit;
+
+    program.push(Inst::Split(frag.start, exit));
     Fragment { start, exit }
 }
 
@@ -319,6 +366,135 @@ mod test {
         assert_eq!(machine.program[7], ValidInstruction::Jump(8));
         assert_eq!(machine.program[8], ValidInstruction::Consume('c', 9));
         assert_eq!(machine.program[9], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn simple_plus_regex() {
+        /*
+        "a+"
+        programLen = 0
+        (0) --a---> (1)
+        programLen = 2
+        program[1] = Split(0,2)   -- fills 'a's own exit hole, no extra slot
+        program[2] = Hole
+
+        (1) -> (0)
+        (1) -> (2)
+
+        start=0 exit=2
+         */
+        let ast = parse("a+").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 3);
+        assert_eq!(machine.program[0], ValidInstruction::Consume('a', 1));
+        assert_eq!(machine.program[1], ValidInstruction::Split(0, 2));
+        assert_eq!(machine.program[2], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn plus_then_a_literal() {
+        /* the regex: "a+b"  ->  Concat(Plus(Literal('a')), Literal('b'))
+
+        Same seam-wiring as simple_concat_regex, but the left fragment is now
+        a Plus instead of a bare Literal -- proves compile_concat doesn't care
+        what produced left.exit, only that it's a hole to fill.
+
+        compile 'a'    0: Consume('a', 1)   1: Hole            frag = (0, 1)
+        plus           1: Split(0, 2)       2: Hole            frag = (0, 2)
+        compile 'b'    3: Consume('b', 4)   4: Hole            frag = (3, 4)
+        concat seam    2 -> Jump(3)                             frag = (0, 4)
+        top level      4: Match                                              */
+        let ast = parse("a+b").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 5);
+        assert_eq!(machine.program[0], ValidInstruction::Consume('a', 1));
+        assert_eq!(machine.program[1], ValidInstruction::Split(0, 2));
+        assert_eq!(machine.program[2], ValidInstruction::Jump(3));
+        assert_eq!(machine.program[3], ValidInstruction::Consume('b', 4));
+        assert_eq!(machine.program[4], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn plus_of_an_alternation() {
+        /* the regex: "(a|b)+"  ->  Plus(Alternation('a','b'))
+
+        Proves compile_plus only ever touches frag.start/frag.exit as two
+        integers -- it works the same whether the child is a bare Literal or
+        a whole Alternation subtree underneath it.
+
+        compile 'a'    0: Consume('a', 1)   1: Hole              frag = (0, 1)
+        compile 'b'    2: Consume('b', 3)   3: Hole              frag = (2, 3)
+        alternation    4: Split(0, 2)       5: Hole
+                       1 -> Jump(5)         3 -> Jump(5)         frag = (4, 5)
+        plus           5: Split(4, 6)       6: Hole              frag = (4, 6)
+        top level      6: Match                                                */
+        let ast = parse("(a|b)+").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 4);
+        assert_eq!(machine.program.len(), 7);
+        assert_eq!(machine.program[0], ValidInstruction::Consume('a', 1));
+        assert_eq!(machine.program[1], ValidInstruction::Jump(5));
+        assert_eq!(machine.program[2], ValidInstruction::Consume('b', 3));
+        assert_eq!(machine.program[3], ValidInstruction::Jump(5));
+        assert_eq!(machine.program[4], ValidInstruction::Split(0, 2));
+        assert_eq!(machine.program[5], ValidInstruction::Split(4, 6));
+        assert_eq!(machine.program[6], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn simple_question_regex() {
+        let ast = parse("a?").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 2);
+        assert_eq!(machine.program.len(), 3);
+        assert_eq!(machine.program[0], ValidInstruction::Consume('a', 1));
+        assert_eq!(machine.program[1], ValidInstruction::Match);
+        assert_eq!(machine.program[2], ValidInstruction::Split(0, 1));
+    }
+
+    #[test]
+    fn question_then_a_literal() {
+        /* the regex: "a?b"  ->  Concat(Question(Literal('a')), Literal('b'))
+
+        compile 'a'    0: Consume('a', 1)   1: Hole            frag = (0, 1)
+        question       2: Split(0, 1)                          frag = (2, 1)
+        compile 'b'    3: Consume('b', 4)   4: Hole            frag = (3, 4)
+        concat seam    1 -> Jump(3)                            frag = (2, 4)
+        top level      4: Match                                            */
+        let ast = parse("a?b").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 2);
+        assert_eq!(machine.program.len(), 5);
+        assert_eq!(machine.program[0], ValidInstruction::Consume('a', 1));
+        assert_eq!(machine.program[1], ValidInstruction::Jump(3));
+        assert_eq!(machine.program[2], ValidInstruction::Split(0, 1));
+        assert_eq!(machine.program[3], ValidInstruction::Consume('b', 4));
+        assert_eq!(machine.program[4], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn question_of_an_alternation() {
+        /* the regex: "(a|b)?"  ->  Question(Alternation('a','b'))
+
+        compile 'a'    0: Consume('a', 1)   1: Hole              frag = (0, 1)
+        compile 'b'    2: Consume('b', 3)   3: Hole              frag = (2, 3)
+        alternation    4: Split(0, 2)       5: Hole
+                       1 -> Jump(5)         3 -> Jump(5)         frag = (4, 5)
+        question       6: Split(4, 5)                            frag = (6, 5)
+        top level      5: Match                                                */
+        let ast = parse("(a|b)?").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 6);
+        assert_eq!(machine.program.len(), 7);
+        assert_eq!(machine.program[0], ValidInstruction::Consume('a', 1));
+        assert_eq!(machine.program[1], ValidInstruction::Jump(5));
+        assert_eq!(machine.program[2], ValidInstruction::Consume('b', 3));
+        assert_eq!(machine.program[3], ValidInstruction::Jump(5));
+        assert_eq!(machine.program[4], ValidInstruction::Split(0, 2));
+        assert_eq!(machine.program[5], ValidInstruction::Match);
+        assert_eq!(machine.program[6], ValidInstruction::Split(4, 5));
     }
 
     #[test]

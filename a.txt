@@ -12,55 +12,53 @@ start = 4
 
 S_0 = closure({4}, [4])
       4: Split(0, 2) — has ε-edges, not a wall. Add 4, follow both arms.
-        arm 1 → 0: Consume, wall. Add 0, stop.
-        arm 2 → 2: Consume, wall. Add 2, stop.
-S_0 = ({4, 0, 2},[0,2])
+              arm 1 → 0: Consume, wall. Add 0, stop.
+                      arm 2 → 2: Consume, wall. Add 2, stop.
+                      S_0 = ({4, 0, 2},[0,2])
 
-read 'a'(current,input[0])
-    step([0,2]):
-      0: Consume('a', 1) → matches 'a', add 1
-      2: Consume('b', 3) → does not match 'a'.
-    next = ({1}, [1])
-    closure(next):
-      closure: 1 is Jump(5)  → add 5
-               5 is Match: wall, stop
-S_1 = ({1,5}, [5])
+                      read 'a'(current,input[0])
+                          step([0,2]):
+                                0: Consume('a', 1) → matches 'a', add 1
+                                      2: Consume('b', 3) → does not match 'a'.
+                                          next = ({1}, [1])
+                                              closure(next):
+                                                    closure: 1 is Jump(5)  → add 5
+                                                                   5 is Match: wall, stop
+                                                                   S_1 = ({1,5}, [5])
 
-read 'b'(current,input[1])
-    step([5]):
-      5: Match → wall, stop
-
-
-regex: a*
-0: Consume('a', 1)
-1: Jump(2)
-2: Split(0, 3)
-3: Match
-start = 2
-
-input: ab
-S_0 = closure({2}, [2])
-      2: Split(0, 3) — has ε-edges, not a wall. Add 2, follow both arms.
-        arm 1 → 0: Consume, wall. Add 0, stop.
-        arm 2 → 3: Match, wall. Add 3, stop.
-S_0 = ({2, 0, 3}, [0,3])
-
-read 'a'(current,input[0])
-    step([0,3]):
-      0: Consume('a', 1) → matches 'a', add 1
-      3: Match → result = Some(0), stop
-    next = ({1}, [1])
-    closure(next):
-      closure: 1 is Jump(2)  → add 2
-               2 is Split(0, 3) → add 0, add 3
-               3 is Match: wall, stop
-S_1 = ({1,2,0,3}, [0,3])
-
-read 'b'(current,input[1])
-    step([0,3]):
-      0: Consume('a', 1) → does not match 'b'.
-      3: Match → result = Some(1), stop
-    next = (empty, [])
+                                                                   read 'b'(current,input[1])
+                                                                       step([5]):
+                                                                             5: Match → wall, stop
 
 
+                                                                             regex: a*
+                                                                             0: Consume('a', 1)
+                                                                             1: Jump(2)
+                                                                             2: Split(0, 3)
+                                                                             3: Match
+                                                                             start = 2
+
+                                                                             input: ab
+                                                                             S_0 = closure({2}, [2])
+                                                                                   2: Split(0, 3) — has ε-edges, not a wall. Add 2, follow both arms.
+                                                                                           arm 1 → 0: Consume, wall. Add 0, stop.
+                                                                                                   arm 2 → 3: Match, wall. Add 3, stop.
+                                                                                                   S_0 = ({2, 0, 3}, [0,3])
+
+                                                                                                   read 'a'(current,input[0])
+                                                                                                       step([0,3]):
+                                                                                                             0: Consume('a', 1) → matches 'a', add 1
+                                                                                                                   3: Match → result = Some(0), stop
+                                                                                                                       next = ({1}, [1])
+                                                                                                                           closure(next):
+                                                                                                                                 closure: 1 is Jump(2)  → add 2
+                                                                                                                                                2 is Split(0, 3) → add 0, add 3
+                                                                                                                                                               3 is Match: wall, stop
+                                                                                                                                                               S_1 = ({1,2,0,3}, [0,3])
+
+                                                                                                                                                               read 'b'(current,input[1])
+                                                                                                                                                                   step([0,3]):
+                                                                                                                                                                         0: Consume('a', 1) → does not match 'b'.
+                                                                                                                                                                               3: Match → result = Some(1), stop
+                                                                                                                                                                                   next = (empty, [])
 

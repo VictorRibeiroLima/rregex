@@ -53,6 +53,57 @@ fn empty_alternation_branch() {
 }
 
 #[test]
+fn plus_matches_one_or_more() {
+    assert!(!matches("a+", ""));
+    assert!(matches("a+", "a"));
+    assert!(matches("a+", "aaaaa"));
+    assert!(!matches("a+", "b"));
+    assert!(!matches("a+", "ab"));
+}
+
+#[test]
+fn plus_of_an_alternation() {
+    assert!(!matches("(a|b)+", ""));
+    assert!(matches("(a|b)+", "a"));
+    assert!(matches("(a|b)+", "abbaab"));
+    assert!(!matches("(a|b)+", "c"));
+    assert!(!matches("(a|b)+", "abc"));
+}
+
+#[test]
+fn a_plus_followed_by_the_same_literal() {
+    assert!(!matches("a+a", "a")); // the mandatory 'a' leaves nothing for the trailing literal
+    assert!(matches("a+a", "aa"));
+    assert!(matches("a+a", "aaaa"));
+    assert!(!matches("a+a", ""));
+}
+
+#[test]
+fn question_matches_zero_or_one() {
+    assert!(matches("a?", ""));
+    assert!(matches("a?", "a"));
+    assert!(!matches("a?", "aa"));
+    assert!(!matches("a?", "b"));
+}
+
+#[test]
+fn question_of_an_alternation() {
+    assert!(matches("(a|b)?", ""));
+    assert!(matches("(a|b)?", "a"));
+    assert!(matches("(a|b)?", "b"));
+    assert!(!matches("(a|b)?", "ab"));
+    assert!(!matches("(a|b)?", "c"));
+}
+
+#[test]
+fn a_question_followed_by_the_same_literal() {
+    assert!(matches("a?a", "a"));
+    assert!(matches("a?a", "aa"));
+    assert!(!matches("a?a", "aaa")); // '?' caps the optional part at one, plus the mandatory one is at most two
+    assert!(!matches("a?a", ""));
+}
+
+#[test]
 fn star_matches_zero_or_more() {
     assert!(matches("a*", ""));
     assert!(matches("a*", "a"));
