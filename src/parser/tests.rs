@@ -25,6 +25,14 @@ fn star(inner: Ast) -> Ast {
     Ast::Star(Box::new(inner))
 }
 
+fn plus(inner: Ast) -> Ast {
+    Ast::Plus(Box::new(inner))
+}
+
+fn question(inner: Ast) -> Ast {
+    Ast::Question(Box::new(inner))
+}
+
 // --- should parse ----------------------------------------------------------
 
 #[test]
@@ -55,6 +63,38 @@ fn concat_binds_tighter_than_alternation() {
 fn star_binds_to_the_single_preceding_atom() {
     // `a|(b(c*))` — the star takes `c` only, not `bc`.
     assert_eq!(ast("a|bc*"), alt(lit('a'), cat(lit('b'), star(lit('c')))));
+}
+
+#[test]
+fn plus_binds_to_the_single_preceding_atom() {
+    // `a|(b(c+))` -- same argument as the `*` case: the operator takes `c`
+    // only, not `bc`.
+    assert_eq!(ast("a|bc+"), alt(lit('a'), cat(lit('b'), plus(lit('c')))));
+}
+
+#[test]
+fn question_binds_to_the_single_preceding_atom() {
+    assert_eq!(ast("a|bc?"), alt(lit('a'), cat(lit('b'), question(lit('c')))));
+}
+
+#[test]
+fn stacked_plus() {
+    assert_eq!(ast("a++"), plus(plus(lit('a'))));
+}
+
+#[test]
+fn stacked_question() {
+    assert_eq!(ast("a??"), question(question(lit('a'))));
+}
+
+#[test]
+fn repetition_operators_stack_left_to_right_when_mixed() {
+    // parse_repetition is a loop, not a single dispatch: each operator wraps
+    // whatever the previous one built, so different operators compose the
+    // same way repeated `*` already does.
+    assert_eq!(ast("a+*"), star(plus(lit('a'))));
+    assert_eq!(ast("a?*"), star(question(lit('a'))));
+    assert_eq!(ast("a*+"), plus(star(lit('a'))));
 }
 
 #[test]
@@ -121,11 +161,15 @@ fn unmatched_close_paren() {
 #[test]
 fn leading_repetition_operator() {
     assert!(parse("*a").is_err());
+    assert!(parse("+a").is_err());
+    assert!(parse("?a").is_err());
 }
 
 #[test]
 fn repetition_operator_with_no_atom() {
     assert!(parse("a|*").is_err());
+    assert!(parse("a|+").is_err());
+    assert!(parse("a|?").is_err());
 }
 
 // --- empty branches --------------------------------------------------------

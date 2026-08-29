@@ -45,6 +45,8 @@ fn compile_fragment(ast: &Ast, program: &mut Program) -> Fragment {
         Ast::Concat(left, right) => compile_concat(left, right, program),
         Ast::Alternation(left, right) => compile_alternation(left, right, program),
         Ast::Star(ast) => compile_star(ast, program),
+        Ast::Plus(_) => todo!("Plus operator is not implemented yet"),
+        Ast::Question(_) => todo!("Question operator is not implemented yet"),
         Ast::Any => compile_any(program),
     }
 }

@@ -13,6 +13,8 @@ pub enum Ast {
     Concat(Box<Ast>, Box<Ast>),
     Alternation(Box<Ast>, Box<Ast>),
     Star(Box<Ast>),
+    Plus(Box<Ast>),
+    Question(Box<Ast>),
     Any,
 }
 
@@ -42,7 +44,7 @@ fn parse_concat(cursor: &mut Cursor) -> Result<Ast, ParserError> {
         Some(')') | Some('|') => return Ok(Ast::Empty),
         _ => {}
     }
-    let node1 = parse_star(cursor)?;
+    let node1 = parse_repetition(cursor)?;
 
     let peak = cursor.peek();
     let node2 = match peak {
@@ -57,12 +59,24 @@ fn parse_concat(cursor: &mut Cursor) -> Result<Ast, ParserError> {
     }
 }
 
-fn parse_star(cursor: &mut Cursor) -> Result<Ast, ParserError> {
+fn parse_repetition(cursor: &mut Cursor) -> Result<Ast, ParserError> {
     let mut node = parse_atom(cursor)?;
-    //A repetition can wrap another repetition
-    while let Some('*') = cursor.peek() {
-        cursor.next();
-        node = Ast::Star(Box::new(node));
+    while let Some(c) = cursor.peek() {
+        match c {
+            '*' => {
+                cursor.next();
+                node = Ast::Star(Box::new(node));
+            }
+            '+' => {
+                cursor.next();
+                node = Ast::Plus(Box::new(node));
+            }
+            '?' => {
+                cursor.next();
+                node = Ast::Question(Box::new(node));
+            }
+            _ => break,
+        }
     }
     Ok(node)
 }
