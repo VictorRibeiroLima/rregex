@@ -45,6 +45,7 @@ fn compile_fragment(ast: &Ast, program: &mut Program) -> Fragment {
         Ast::Concat(left, right) => compile_concat(left, right, program),
         Ast::Alternation(left, right) => compile_alternation(left, right, program),
         Ast::Star(ast) => compile_star(ast, program),
+        Ast::Any => compile_any(program),
     }
 }
 
@@ -117,6 +118,14 @@ fn compile_star(ast: &Ast, program: &mut Program) -> Fragment {
     Fragment { start, exit }
 }
 
+fn compile_any(program: &mut Program) -> Fragment {
+    let start = program.len();
+    program.push(Inst::ConsumeAny(start + 1));
+    let exit = program.len();
+    program.push(Inst::Hole);
+    Fragment { start, exit }
+}
+
 #[cfg(test)]
 mod test {
     use crate::{
@@ -146,6 +155,32 @@ mod test {
         assert_eq!(machine.program[0], ValidInstruction::Consume('a', 1));
         assert_eq!(machine.program[1], ValidInstruction::Jump(2));
         assert_eq!(machine.program[2], ValidInstruction::Consume('b', 3));
+        assert_eq!(machine.program[3], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn dot_regex() {
+        // "." compiles to exactly one ConsumeAny, same shape as a Literal's
+        // Consume: push the instruction, push a Hole for the exit.
+        let ast = parse(".").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 2);
+        assert_eq!(machine.program[0], ValidInstruction::ConsumeAny(1));
+        assert_eq!(machine.program[1], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn dot_after_literal() {
+        // "a." -- same seam-wiring as "ab" (simple_concat_regex), just with
+        // the second atom compiled by compile_any instead of compile_literal.
+        let ast = parse("a.").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 4);
+        assert_eq!(machine.program[0], ValidInstruction::Consume('a', 1));
+        assert_eq!(machine.program[1], ValidInstruction::Jump(2));
+        assert_eq!(machine.program[2], ValidInstruction::ConsumeAny(3));
         assert_eq!(machine.program[3], ValidInstruction::Match);
     }
 

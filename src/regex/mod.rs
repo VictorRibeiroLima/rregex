@@ -101,6 +101,11 @@ impl Regex {
                         next.traverse(j);
                     }
                 }
+                Instruction::ConsumeAny(j) => {
+                    if next.insert(j) {
+                        next.traverse(j);
+                    }
+                }
                 Instruction::Match => {
                     return (next, true);
                 }
@@ -136,7 +141,7 @@ impl Regex {
                     self.follow(seen_set, j2);
                 }
             }
-            Instruction::Consume(_, _) | Instruction::Match => {
+            Instruction::Consume(_, _) | Instruction::Match | Instruction::ConsumeAny(_) => {
                 seen_set.traverse(i);
             }
         };

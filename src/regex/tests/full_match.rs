@@ -113,6 +113,33 @@ fn stacked_stars_terminate() {
 }
 
 #[test]
+fn dot_matches_any_single_character() {
+    assert!(matches(".", "a"));
+    assert!(matches(".", "1"));
+    assert!(matches(".", "!"));
+    assert!(!matches(".", ""));
+    assert!(!matches(".", "ab"));
+}
+
+#[test]
+fn dot_has_no_special_case_for_whitespace_or_newline() {
+    // Unlike most engines' default mode, this alphabet is plain `char` with
+    // no carve-outs -- ConsumeAny has no comparison to skip, so every char
+    // is a member, newline included.
+    assert!(matches(".", " "));
+    assert!(matches(".", "\n"));
+}
+
+#[test]
+fn dot_combined_with_literals_and_star() {
+    assert!(matches("a.c", "abc"));
+    assert!(!matches("a.c", "ac"));
+    assert!(!matches("a.c", "abbc"));
+    assert!(matches(".*", ""));
+    assert!(matches(".*", "abc123!@#"));
+}
+
+#[test]
 fn the_whole_string_must_be_consumed() {
     // full_match answers membership, not search. A pattern occurring inside
     // the input is not a match.

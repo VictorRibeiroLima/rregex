@@ -67,6 +67,26 @@ fn the_loop_thread_and_the_exit_thread_both_stay_alive() {
 }
 
 #[test]
+fn dot_consumes_exactly_one_character() {
+    assert_eq!(find(".", "a"), Some(1));
+    assert_eq!(find(".", ""), None);
+    assert_eq!(find(".", "ab"), Some(1)); // leftover 'b' is fine, find isn't anchored at the end
+}
+
+#[test]
+fn dot_star_is_greedy_over_any_character() {
+    assert_eq!(find(".*", "abc123!@#"), Some(9));
+    assert_eq!(find(".*", ""), Some(0));
+}
+
+#[test]
+fn dot_between_literals_requires_exactly_one_character() {
+    assert_eq!(find("a.c", "abc"), Some(3));
+    assert_eq!(find("a.c", "ac"), None); // nothing there for '.' to consume
+    assert_eq!(find("a.c", "abbc"), None); // one char too many between a and c
+}
+
+#[test]
 fn find_through_a_star_of_an_alternation() {
     assert_eq!(find("(a|b)*c", "c"), Some(1));
     assert_eq!(find("(a|b)*c", "bbabc"), Some(5));

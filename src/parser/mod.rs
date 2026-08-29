@@ -13,6 +13,7 @@ pub enum Ast {
     Concat(Box<Ast>, Box<Ast>),
     Alternation(Box<Ast>, Box<Ast>),
     Star(Box<Ast>),
+    Any,
 }
 
 pub fn parse(input: &str) -> Result<Ast, ParserError> {
@@ -70,6 +71,10 @@ fn parse_atom(cursor: &mut Cursor) -> Result<Ast, ParserError> {
     let peek = cursor.peek();
     match peek {
         None => Err(ParserError::UnexpectedEndOfInput),
+        Some('.') => {
+            cursor.next();
+            Ok(Ast::Any)
+        }
         Some('*' | '+' | '?') => Err(ParserError::UnexpectedToken(peek.unwrap())),
         Some('|') | Some(')') => Err(ParserError::UnexpectedToken(peek.unwrap())),
         Some('(') => {

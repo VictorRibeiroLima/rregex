@@ -64,6 +64,23 @@ fn group_makes_an_expression_into_one_atom() {
 }
 
 #[test]
+fn dot_parses_to_any() {
+    assert_eq!(ast("."), Ast::Any);
+}
+
+#[test]
+fn dot_binds_as_a_single_atom() {
+    // `.` sits at atom level, same as a Literal -- it must take part in
+    // Concat like any other atom, not swallow or get swallowed by a neighbor.
+    assert_eq!(ast("a.b"), cat(lit('a'), cat(Ast::Any, lit('b'))));
+}
+
+#[test]
+fn dot_can_be_starred() {
+    assert_eq!(ast(".*"), star(Ast::Any));
+}
+
+#[test]
 fn stacked_stars() {
     // `a**` is `(a*)*`. It must PARSE — it compiles to an NFA with an
     // epsilon-loop, a cycle consuming no input, which is the matcher's problem.

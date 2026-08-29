@@ -6,6 +6,7 @@ use crate::machine::State;
 pub enum Instruction {
     Hole,
     Consume(char, State),
+    ConsumeAny(State),
     Jump(State),
     Split(State, State),
     Match,
@@ -14,6 +15,7 @@ pub enum Instruction {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum ValidInstruction {
     Consume(char, State),
+    ConsumeAny(State),
     Jump(State),
     Split(State, State),
     Match,
@@ -32,6 +34,7 @@ impl ValidProgram {
             match inst {
                 Instruction::Hole => return Err("Program contains a hole".to_string()),
                 Instruction::Consume(c, s) => valid_program.push(ValidInstruction::Consume(c, s)),
+                Instruction::ConsumeAny(s) => valid_program.push(ValidInstruction::ConsumeAny(s)),
                 Instruction::Jump(s) => valid_program.push(ValidInstruction::Jump(s)),
                 Instruction::Split(s1, s2) => valid_program.push(ValidInstruction::Split(s1, s2)),
                 Instruction::Match => valid_program.push(ValidInstruction::Match),
