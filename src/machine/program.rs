@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use crate::machine::State;
+use crate::machine::{State, class::Class};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Instruction {
@@ -9,15 +9,17 @@ pub enum Instruction {
     ConsumeAny(State),
     Jump(State),
     Split(State, State),
+    Class(Class),
     Match,
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ValidInstruction {
     Consume(char, State),
     ConsumeAny(State),
     Jump(State),
     Split(State, State),
+    Class(Class),
     Match,
 }
 
@@ -37,6 +39,7 @@ impl ValidProgram {
                 Instruction::ConsumeAny(s) => valid_program.push(ValidInstruction::ConsumeAny(s)),
                 Instruction::Jump(s) => valid_program.push(ValidInstruction::Jump(s)),
                 Instruction::Split(s1, s2) => valid_program.push(ValidInstruction::Split(s1, s2)),
+                Instruction::Class(class) => valid_program.push(ValidInstruction::Class(class)),
                 Instruction::Match => valid_program.push(ValidInstruction::Match),
             }
         }

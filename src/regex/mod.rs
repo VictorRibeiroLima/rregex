@@ -91,19 +91,27 @@ impl Regex {
         let program = self.machine.program();
         let traversed = &seen_set.traversed;
         for i in traversed {
-            let inst = program[*i];
+            let inst = &program[*i];
             match inst {
                 Instruction::Consume(t, j) => {
-                    if t != c {
+                    if *t != c {
                         continue;
                     }
-                    if next.insert(j) {
-                        next.traverse(j);
+                    if next.insert(*j) {
+                        next.traverse(*j);
                     }
                 }
                 Instruction::ConsumeAny(j) => {
-                    if next.insert(j) {
-                        next.traverse(j);
+                    if next.insert(*j) {
+                        next.traverse(*j);
+                    }
+                }
+                Instruction::Class(class) => {
+                    if class.match_c(c) {
+                        let j = class.exit();
+                        if next.insert(j) {
+                            next.traverse(j);
+                        }
                     }
                 }
                 Instruction::Match => {
@@ -125,23 +133,26 @@ impl Regex {
 
     fn follow(&self, seen_set: &mut SeenSet, i: usize) {
         let program = self.machine.program();
-        let inst = program[i];
+        let inst = &program[i];
         match inst {
             Instruction::Jump(j) => {
-                if !seen_set.insert(j) {
+                if !seen_set.insert(*j) {
                     return;
                 }
-                self.follow(seen_set, j);
+                self.follow(seen_set, *j);
             }
             Instruction::Split(j1, j2) => {
-                if seen_set.insert(j1) {
-                    self.follow(seen_set, j1);
+                if seen_set.insert(*j1) {
+                    self.follow(seen_set, *j1);
                 }
-                if seen_set.insert(j2) {
-                    self.follow(seen_set, j2);
+                if seen_set.insert(*j2) {
+                    self.follow(seen_set, *j2);
                 }
             }
-            Instruction::Consume(_, _) | Instruction::Match | Instruction::ConsumeAny(_) => {
+            Instruction::Consume(_, _)
+            | Instruction::Match
+            | Instruction::ConsumeAny(_)
+            | Instruction::Class(_) => {
                 seen_set.traverse(i);
             }
         };

@@ -1,6 +1,10 @@
-use crate::parser::Ast::{self};
+use crate::{
+    machine::class::{Class, ClassInstruction},
+    parser::ast::{Ast, ClassType},
+};
 use program::{Instruction as Inst, Program, ValidInstruction, ValidProgram};
 
+mod class;
 mod program;
 
 pub type State = usize;
@@ -50,6 +54,7 @@ fn compile_fragment(ast: &Ast, program: &mut Program) -> Fragment {
         Ast::LazyPlus(ast) => compile_lazy_plus(ast, program),
         Ast::Question(ast) => compile_question(ast, program),
         Ast::LazyQuestion(ast) => compile_lazy_question(ast, program),
+        Ast::Class(c, negated) => compile_class(c, *negated, program),
         Ast::Any => compile_any(program),
     }
 }
@@ -64,6 +69,17 @@ fn compile_literal(c: char, program: &mut Program) -> Fragment {
     let start = program.len();
     program.push(Inst::Consume(c, start + 1));
     let exit = program.len();
+    program.push(Inst::Hole);
+    Fragment { start, exit }
+}
+
+fn compile_class(c: &Vec<ClassType>, negated: bool, program: &mut Program) -> Fragment {
+    let start = program.len();
+    let instructions: Vec<ClassInstruction> = c.iter().map(|class| class.into()).collect();
+    let exit = start + 1;
+    let class = Class::new(instructions, negated, exit);
+
+    program.push(Inst::Class(class));
     program.push(Inst::Hole);
     Fragment { start, exit }
 }
@@ -215,8 +231,11 @@ fn compile_any(program: &mut Program) -> Fragment {
 #[cfg(test)]
 mod test {
     use crate::{
-        machine::{Machine, ValidInstruction},
-        parser::{Ast, parse},
+        machine::{
+            Machine, ValidInstruction,
+            class::{Class, ClassInstruction},
+        },
+        parser::{ast::Ast, parse},
     };
 
     #[test]
@@ -575,6 +594,94 @@ mod test {
         assert_eq!(machine.program[0], ValidInstruction::Consume('a', 1));
         assert_eq!(machine.program[1], ValidInstruction::Match);
         assert_eq!(machine.program[2], ValidInstruction::Split(1, 0));
+    }
+
+    #[test]
+    fn simple_class_regex() {
+        // "[abc]" -- one Class instruction plus the shared Hole/exit, same
+        // shape as compile_literal and compile_any: one atom, one slot to
+        // consume, one slot for whoever comes next.
+        let ast = parse("[abc]").unwrap();
+        let machine = Machine::new(ast);
+        let expected = Class::new(
+            vec![
+                ClassInstruction::Single('a'),
+                ClassInstruction::Single('b'),
+                ClassInstruction::Single('c'),
+            ],
+            false,
+            1,
+        );
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 2);
+        assert_eq!(machine.program[0], ValidInstruction::Class(expected));
+        assert_eq!(machine.program[1], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn class_of_a_range() {
+        let ast = parse("[a-z]").unwrap();
+        let machine = Machine::new(ast);
+        let expected = Class::new(vec![ClassInstruction::Range('a', 'z')], false, 1);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 2);
+        assert_eq!(machine.program[0], ValidInstruction::Class(expected));
+        assert_eq!(machine.program[1], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn negated_class_regex() {
+        let ast = parse("[^a]").unwrap();
+        let machine = Machine::new(ast);
+        let expected = Class::new(vec![ClassInstruction::Single('a')], true, 1);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 2);
+        assert_eq!(machine.program[0], ValidInstruction::Class(expected));
+        assert_eq!(machine.program[1], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn class_then_a_literal() {
+        // "[ab]c" -- same seam-wiring as simple_concat_regex: compile_concat
+        // only ever reads left.exit, it doesn't care that this fragment came
+        // from compile_class instead of compile_literal.
+        let ast = parse("[ab]c").unwrap();
+        let machine = Machine::new(ast);
+        let expected = Class::new(
+            vec![ClassInstruction::Single('a'), ClassInstruction::Single('b')],
+            false,
+            1,
+        );
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 4);
+        assert_eq!(machine.program[0], ValidInstruction::Class(expected));
+        assert_eq!(machine.program[1], ValidInstruction::Jump(2));
+        assert_eq!(machine.program[2], ValidInstruction::Consume('c', 3));
+        assert_eq!(machine.program[3], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn class_composes_with_plus() {
+        // "[abc]+" -- compile_plus doesn't know or care that its child is a
+        // Class fragment instead of a Literal one; it only touches
+        // frag.start/frag.exit as two integers, same proof as
+        // plus_of_an_alternation.
+        let ast = parse("[abc]+").unwrap();
+        let machine = Machine::new(ast);
+        let expected = Class::new(
+            vec![
+                ClassInstruction::Single('a'),
+                ClassInstruction::Single('b'),
+                ClassInstruction::Single('c'),
+            ],
+            false,
+            1,
+        );
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 3);
+        assert_eq!(machine.program[0], ValidInstruction::Class(expected));
+        assert_eq!(machine.program[1], ValidInstruction::Split(0, 2));
+        assert_eq!(machine.program[2], ValidInstruction::Match);
     }
 
     #[test]

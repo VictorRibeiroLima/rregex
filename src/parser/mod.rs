@@ -1,24 +1,15 @@
-use crate::cursor::Cursor;
+use crate::{
+    cursor::Cursor,
+    parser::ast::{Ast, ClassType},
+};
+
+pub mod ast;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParserError {
     UnexpectedToken(char),
+    InvalidRange(char, char),
     UnexpectedEndOfInput,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum Ast {
-    Empty,
-    Literal(char),
-    Concat(Box<Ast>, Box<Ast>),
-    Alternation(Box<Ast>, Box<Ast>),
-    Star(Box<Ast>),
-    LazyStar(Box<Ast>),
-    Plus(Box<Ast>),
-    LazyPlus(Box<Ast>),
-    Question(Box<Ast>),
-    LazyQuestion(Box<Ast>),
-    Any,
 }
 
 pub fn parse(input: &str) -> Result<Ast, ParserError> {
@@ -107,6 +98,16 @@ fn parse_atom(cursor: &mut Cursor) -> Result<Ast, ParserError> {
             cursor.next();
             Ok(Ast::Any)
         }
+        Some('[') => {
+            cursor.next();
+            let node = parse_class(cursor)?;
+            if cursor.peek() == Some(']') {
+                cursor.next();
+                return Ok(node);
+            } else {
+                return Err(ParserError::UnexpectedToken(cursor.peek().unwrap_or('\0')));
+            }
+        }
         Some('*' | '+' | '?') => Err(ParserError::UnexpectedToken(peek.unwrap())),
         Some('|') | Some(')') => Err(ParserError::UnexpectedToken(peek.unwrap())),
         Some('(') => {
@@ -126,6 +127,60 @@ fn parse_atom(cursor: &mut Cursor) -> Result<Ast, ParserError> {
             cursor.next();
             Ok(Ast::Literal(c))
         }
+    }
+}
+
+fn parse_class(cursor: &mut Cursor) -> Result<Ast, ParserError> {
+    let mut classes = vec![]; // Placeholder for actual class parsing logic]
+    let mut negation = false;
+    let mut start = true;
+    loop {
+        let peek = cursor.peek();
+        match peek {
+            None => return Err(ParserError::UnexpectedEndOfInput),
+            Some(']') => return Ok(Ast::Class(classes, negation)),
+            Some(c) => {
+                cursor.next();
+                if c == '^' && start {
+                    negation = true;
+                    start = false;
+                    continue;
+                }
+
+                let n = match cursor.peek() {
+                    None | Some(']') => {
+                        classes.push(ClassType::Single(c));
+                        start = false;
+                        continue;
+                    }
+                    Some(n) => n,
+                };
+
+                if n != '-' {
+                    classes.push(ClassType::Single(c));
+                    start = false;
+                    continue;
+                }
+
+                let n2 = match cursor.peek_at(1) {
+                    None | Some(']') => {
+                        classes.push(ClassType::Single(c));
+                        start = false;
+                        continue;
+                    }
+                    Some(n) => n,
+                };
+                //We are at a range consume the tokens
+                cursor.next();
+                cursor.next();
+
+                if c > n2 {
+                    return Err(ParserError::InvalidRange(c, n2));
+                }
+                classes.push(ClassType::Range(c, n2));
+            }
+        }
+        start = false;
     }
 }
 

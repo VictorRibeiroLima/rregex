@@ -104,6 +104,35 @@ fn a_question_followed_by_the_same_literal() {
 }
 
 #[test]
+fn class_matches_exactly_one_member() {
+    assert!(matches("[abc]", "a"));
+    assert!(!matches("[abc]", "d"));
+    assert!(!matches("[abc]", "")); // a class still consumes exactly one char
+    assert!(!matches("[abc]", "ab"));
+}
+
+#[test]
+fn negated_class_matches_the_complement() {
+    assert!(matches("[^abc]", "d"));
+    assert!(!matches("[^abc]", "a"));
+    assert!(!matches("[^abc]", "b"));
+    assert!(!matches("[^abc]", "c"));
+}
+
+#[test]
+fn class_range_matches_by_scalar_value() {
+    assert!(matches("[a-z]", "m"));
+    assert!(!matches("[a-z]", "M"));
+}
+
+#[test]
+fn class_composed_with_plus() {
+    assert!(matches("[a-z]+", "hello"));
+    assert!(!matches("[a-z]+", "Hello"));
+    assert!(!matches("[a-z]+", ""));
+}
+
+#[test]
 fn star_matches_zero_or_more() {
     assert!(matches("a*", ""));
     assert!(matches("a*", "a"));

@@ -183,3 +183,45 @@ fn find_through_a_star_of_an_alternation() {
     assert_eq!(find("(a|b)*c", "abcd"), Some(3));
     assert_eq!(find("(a|b)*c", "ab"), None);
 }
+
+#[test]
+fn simple_range_class() {
+    assert_eq!(find("[a-z]", "a"), Some(1));
+    assert_eq!(find("[a-z]", "z"), Some(1));
+    assert_eq!(find("[a-z]", "A"), None);
+    assert_eq!(find("[a-z]", "0"), None);
+}
+
+#[test]
+fn class_matches_any_single_member() {
+    assert_eq!(find("[abc]", "a"), Some(1));
+    assert_eq!(find("[abc]", "b"), Some(1));
+    assert_eq!(find("[abc]", "c"), Some(1));
+    assert_eq!(find("[abc]", "d"), None);
+}
+
+#[test]
+fn negated_class_matches_the_complement() {
+    // The De Morgan's case: with three excluded members, a naive per-item
+    // union of negations would wrongly accept everything. This only comes
+    // out right if negation is applied once, to the whole class.
+    assert_eq!(find("[^abc]", "d"), Some(1));
+    assert_eq!(find("[^abc]", "a"), None);
+    assert_eq!(find("[^abc]", "b"), None);
+    assert_eq!(find("[^abc]", "c"), None);
+}
+
+#[test]
+fn class_composed_with_star_is_greedy() {
+    assert_eq!(find("[a-z]*", "hello123"), Some(5));
+    assert_eq!(find("[a-z]*", ""), Some(0));
+    assert_eq!(find("[a-z]*", "HELLO"), Some(0));
+}
+
+#[test]
+fn class_unions_singles_and_ranges() {
+    assert_eq!(find("[a-c1-3]", "a"), Some(1));
+    assert_eq!(find("[a-c1-3]", "3"), Some(1));
+    assert_eq!(find("[a-c1-3]", "d"), None);
+    assert_eq!(find("[a-c1-3]", "4"), None);
+}

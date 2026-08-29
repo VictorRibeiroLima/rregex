@@ -14,6 +14,10 @@ impl From<ParserError> for RegexError {
             ParserError::UnexpectedEndOfInput => {
                 RegexError::ParseError("Unexpected end of input in regex pattern".to_string())
             }
+            ParserError::InvalidRange(c1, c2) => RegexError::ParseError(format!(
+                "Invalid range '{}' - '{}' in regex pattern",
+                c1, c2
+            )),
         }
     }
 }
