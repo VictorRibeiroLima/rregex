@@ -45,8 +45,11 @@ fn compile_fragment(ast: &Ast, program: &mut Program) -> Fragment {
         Ast::Concat(left, right) => compile_concat(left, right, program),
         Ast::Alternation(left, right) => compile_alternation(left, right, program),
         Ast::Star(ast) => compile_star(ast, program),
+        Ast::LazyStar(ast) => compile_lazy_star(ast, program),
         Ast::Plus(ast) => compile_plus(ast, program),
+        Ast::LazyPlus(ast) => compile_lazy_plus(ast, program),
         Ast::Question(ast) => compile_question(ast, program),
+        Ast::LazyQuestion(ast) => compile_lazy_question(ast, program),
         Ast::Any => compile_any(program),
     }
 }
@@ -120,6 +123,19 @@ fn compile_star(ast: &Ast, program: &mut Program) -> Fragment {
     Fragment { start, exit }
 }
 
+fn compile_lazy_star(ast: &Ast, program: &mut Program) -> Fragment {
+    //same as compile_star but the split is reversed
+    let frag = compile_fragment(ast, program);
+    let start = program.len();
+    let exit = start + 1;
+
+    program[frag.exit] = Inst::Jump(start);
+    program.push(Inst::Split(exit, frag.start));
+    program.push(Inst::Hole);
+
+    Fragment { start, exit }
+}
+
 fn compile_plus(ast: &Ast, program: &mut Program) -> Fragment {
     let frag = compile_fragment(ast, program);
     /*
@@ -138,6 +154,17 @@ fn compile_plus(ast: &Ast, program: &mut Program) -> Fragment {
     let start = frag.start;
     let exit = program.len();
     program[frag.exit] = Inst::Split(start, exit);
+    program.push(Inst::Hole);
+
+    Fragment { start, exit }
+}
+
+fn compile_lazy_plus(ast: &Ast, program: &mut Program) -> Fragment {
+    //same as compile_plus but the split is reversed
+    let frag = compile_fragment(ast, program);
+    let start = frag.start;
+    let exit = program.len();
+    program[frag.exit] = Inst::Split(exit, start);
     program.push(Inst::Hole);
 
     Fragment { start, exit }
@@ -164,6 +191,16 @@ fn compile_question(ast: &Ast, program: &mut Program) -> Fragment {
     let exit = frag.exit;
 
     program.push(Inst::Split(frag.start, exit));
+    Fragment { start, exit }
+}
+
+fn compile_lazy_question(ast: &Ast, program: &mut Program) -> Fragment {
+    //same as compile_question but the split is reversed
+    let frag = compile_fragment(ast, program);
+    let start = program.len();
+    let exit = frag.exit;
+
+    program.push(Inst::Split(exit, frag.start));
     Fragment { start, exit }
 }
 
@@ -495,6 +532,49 @@ mod test {
         assert_eq!(machine.program[4], ValidInstruction::Split(0, 2));
         assert_eq!(machine.program[5], ValidInstruction::Match);
         assert_eq!(machine.program[6], ValidInstruction::Split(4, 5));
+    }
+
+    #[test]
+    fn simple_lazy_star_regex() {
+        // "a*?" -- identical to simple_star_regex except the Split's two
+        // targets are swapped: (3, 0) instead of (0, 3). Same states, same
+        // language, different priority order.
+        let ast = parse("a*?").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 2);
+        assert_eq!(machine.program.len(), 4);
+        assert_eq!(machine.program[0], ValidInstruction::Consume('a', 1));
+        assert_eq!(machine.program[1], ValidInstruction::Jump(2));
+        assert_eq!(machine.program[2], ValidInstruction::Split(3, 0));
+        assert_eq!(machine.program[3], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn simple_lazy_plus_regex() {
+        // "a+?" -- identical to simple_plus_regex except Split(0, 2) becomes
+        // Split(2, 0). Entry is still frag.start (0): laziness only changes
+        // what's preferred AFTER the mandatory first 'a', never whether it's
+        // mandatory.
+        let ast = parse("a+?").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 3);
+        assert_eq!(machine.program[0], ValidInstruction::Consume('a', 1));
+        assert_eq!(machine.program[1], ValidInstruction::Split(2, 0));
+        assert_eq!(machine.program[2], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn simple_lazy_question_regex() {
+        // "a??" -- identical to simple_question_regex except Split(0, 1)
+        // becomes Split(1, 0). Same reused exit hole, same new entry slot.
+        let ast = parse("a??").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 2);
+        assert_eq!(machine.program.len(), 3);
+        assert_eq!(machine.program[0], ValidInstruction::Consume('a', 1));
+        assert_eq!(machine.program[1], ValidInstruction::Match);
+        assert_eq!(machine.program[2], ValidInstruction::Split(1, 0));
     }
 
     #[test]

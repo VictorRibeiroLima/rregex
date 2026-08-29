@@ -13,8 +13,11 @@ pub enum Ast {
     Concat(Box<Ast>, Box<Ast>),
     Alternation(Box<Ast>, Box<Ast>),
     Star(Box<Ast>),
+    LazyStar(Box<Ast>),
     Plus(Box<Ast>),
+    LazyPlus(Box<Ast>),
     Question(Box<Ast>),
+    LazyQuestion(Box<Ast>),
     Any,
 }
 
@@ -65,14 +68,29 @@ fn parse_repetition(cursor: &mut Cursor) -> Result<Ast, ParserError> {
         match c {
             '*' => {
                 cursor.next();
+                if cursor.peek() == Some('?') {
+                    cursor.next();
+                    node = Ast::LazyStar(Box::new(node));
+                    continue;
+                }
                 node = Ast::Star(Box::new(node));
             }
             '+' => {
                 cursor.next();
+                if cursor.peek() == Some('?') {
+                    cursor.next();
+                    node = Ast::LazyPlus(Box::new(node));
+                    continue;
+                }
                 node = Ast::Plus(Box::new(node));
             }
             '?' => {
                 cursor.next();
+                if cursor.peek() == Some('?') {
+                    cursor.next();
+                    node = Ast::LazyQuestion(Box::new(node));
+                    continue;
+                }
                 node = Ast::Question(Box::new(node));
             }
             _ => break,

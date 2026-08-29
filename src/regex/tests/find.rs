@@ -141,6 +141,42 @@ fn find_through_a_question_of_an_alternation() {
 }
 
 #[test]
+fn lazy_star_prefers_the_shortest_match() {
+    // The mirror image of star_is_greedy: the recorded offset never climbs,
+    // because the "stop now" thread outranks "loop again" and cuts it the
+    // moment a Match is read.
+    assert_eq!(find("a*?", ""), Some(0));
+    assert_eq!(find("a*?", "aaa"), Some(0));
+    // Composed with a trailing literal, laziness takes only as many loops as
+    // the rest of the pattern forces it to -- one, here, not three.
+    assert_eq!(find("a*?a", "aaa"), Some(1));
+}
+
+#[test]
+fn lazy_plus_still_requires_one_but_prefers_no_more() {
+    // Laziness never touches whether the loop is mandatory -- only what's
+    // preferred once you're past the first, required 'a'.
+    assert_eq!(find("a+?", ""), None);
+    assert_eq!(find("a+?", "aaa"), Some(1));
+}
+
+#[test]
+fn lazy_question_prefers_skipping_when_it_can() {
+    assert_eq!(find("a??", ""), Some(0));
+    assert_eq!(find("a??", "a"), Some(0)); // skips the 'a' even though it's right there
+}
+
+#[test]
+fn the_classic_html_tag_example() {
+    // The textbook case for why greedy vs lazy is a correctness question, not
+    // a performance one: greedy '.*' runs to the LAST '>' in the input,
+    // swallowing everything between two tags as if it were one; lazy '.*?'
+    // stops at the FIRST '>', matching just the opening tag.
+    assert_eq!(find("<.*>", "<a><b>"), Some(6)); // the whole string, both tags
+    assert_eq!(find("<.*?>", "<a><b>"), Some(3)); // just "<a>"
+}
+
+#[test]
 fn find_through_a_star_of_an_alternation() {
     assert_eq!(find("(a|b)*c", "c"), Some(1));
     assert_eq!(find("(a|b)*c", "bbabc"), Some(5));

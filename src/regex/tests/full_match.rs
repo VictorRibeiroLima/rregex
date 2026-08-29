@@ -191,6 +191,31 @@ fn dot_combined_with_literals_and_star() {
 }
 
 #[test]
+fn lazy_quantifiers_still_answer_membership_when_the_minimal_path_spans_the_input() {
+    // full_match asks "does any accepting path exist" -- when the shortest
+    // (lazy, highest-priority) path already happens to consume the whole
+    // string, there's nothing shorter for it to be cut in favor of, so this
+    // works fine regardless of greedy vs lazy.
+    assert!(matches("a*?", ""));
+    assert!(matches("a+?", "a"));
+    assert!(matches("a??", ""));
+    assert!(!matches("a??", "aa")); // '?' still caps at one repetition, lazy or not
+}
+
+#[test]
+fn lazy_quantifiers_expose_the_same_full_match_bug() {
+    // Same root cause as a_higher_priority_short_branch_must_not_hide_a_full_match,
+    // reached through laziness instead of alternation order. "a" IS in L(a?) --
+    // taking the 'a' is optional, not forbidden -- but the lazy interpretation's
+    // highest-priority path is the empty one, find records and cuts on that, and
+    // full_match (derived from find) inherits the wrong answer. Same bug,
+    // same "do not fix unprompted" as its sibling test.
+    assert!(matches("a??", "a"));
+    assert!(matches("a+?", "aaa"));
+    assert!(matches("a*?", "aaa"));
+}
+
+#[test]
 fn the_whole_string_must_be_consumed() {
     // full_match answers membership, not search. A pattern occurring inside
     // the input is not a match.

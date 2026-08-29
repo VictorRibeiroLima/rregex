@@ -33,6 +33,18 @@ fn question(inner: Ast) -> Ast {
     Ast::Question(Box::new(inner))
 }
 
+fn lazy_star(inner: Ast) -> Ast {
+    Ast::LazyStar(Box::new(inner))
+}
+
+fn lazy_plus(inner: Ast) -> Ast {
+    Ast::LazyPlus(Box::new(inner))
+}
+
+fn lazy_question(inner: Ast) -> Ast {
+    Ast::LazyQuestion(Box::new(inner))
+}
+
 // --- should parse ----------------------------------------------------------
 
 #[test]
@@ -83,11 +95,6 @@ fn stacked_plus() {
 }
 
 #[test]
-fn stacked_question() {
-    assert_eq!(ast("a??"), question(question(lit('a'))));
-}
-
-#[test]
 fn repetition_operators_stack_left_to_right_when_mixed() {
     // parse_repetition is a loop, not a single dispatch: each operator wraps
     // whatever the previous one built, so different operators compose the
@@ -95,6 +102,30 @@ fn repetition_operators_stack_left_to_right_when_mixed() {
     assert_eq!(ast("a+*"), star(plus(lit('a'))));
     assert_eq!(ast("a?*"), star(question(lit('a'))));
     assert_eq!(ast("a*+"), plus(star(lit('a'))));
+}
+
+// --- lazy quantifiers --------------------------------------------------------
+//
+// QUANT := ('*' | '+' | '?') '?'? -- the trailing `?` is a modifier on the
+// quantifier just consumed, not a second quantifier. This is why
+// `stacked_question` (which asserted "a??" == Question(Question(a))) is gone:
+// two stacked `?`s and one lazy `?` share the same two characters, and the
+// lazy reading wins. Nothing is lost -- Question(Question(a)) was always the
+// same language as Question(a), so no string became inexpressible.
+
+#[test]
+fn lazy_quantifiers_parse() {
+    assert_eq!(ast("a*?"), lazy_star(lit('a')));
+    assert_eq!(ast("a+?"), lazy_plus(lit('a')));
+    assert_eq!(ast("a??"), lazy_question(lit('a')));
+}
+
+#[test]
+fn lazy_quantifiers_stack_with_other_operators() {
+    // The lazy arms `continue` the loop instead of returning, so whatever
+    // comes next still wraps the lazy node like any other repetition.
+    assert_eq!(ast("a*?*"), star(lazy_star(lit('a'))));
+    assert_eq!(ast("a*+?"), lazy_plus(star(lit('a'))));
 }
 
 #[test]
