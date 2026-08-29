@@ -640,45 +640,264 @@ no longer failure — `find("ab", "abc") == Some(2)`.
   trick and clist/nlist reuse are still deferred until a benchmark complains.
   `std::mem::take` in `rebuild` is the first step toward it.
 - `follow` still recurses per ε-edge; stack depth bounded by `program.len()`.
-- Still unimplemented: `\` escapes (`todo!()` in `parse_atom`), `.`, `+`, `?`,
-  character classes, anchors, `{n,m}`. *This is Lesson 5.*
+- ~~Still unimplemented: `\` escapes, `.`, `+`, `?`, character classes~~ — done,
+  see Lesson 5.a. Anchors and `{n,m}` are still open, see Lesson 5.b.
 
-### Lesson 5 — finishing the syntax (next)
+### Lesson 5.a — `+`, `?`, lazy quantifiers, character classes, and escapes (complete)
 
-**Decided at the end of Lesson 4.** The engine's *machinery* is ahead of its
-*notation*: the matcher can already express lazy, but the parser cannot say
-`*?`, and none of `+`, `?`, `.`, escapes, or character classes exist. Lesson 5
-closes that gap. It is deliberately the small lesson — mostly parser and
-compiler work, little new theory.
+**Built:** the rest of the notation the matcher was already able to express.
+All tests green across the parser, machine, and matcher layers (`cargo test`
+for current counts — every feature below got tests at every layer it touches).
 
-Chosen over the capture-groups lesson for one reason: **it is the proof that
-Lesson 4 works.** `a*?` returning `Some(0)` where `a*` returns `Some(3)` is the
-observable consequence of the ordered list, and right now nothing in the test
-suite can demonstrate it.
+- [src/parser/ast.rs](src/parser/ast.rs) — `Ast` moved out of `parser/mod.rs`
+  into its own file; gained `Plus`, `LazyStar`, `LazyPlus`, `Question`,
+  `LazyQuestion`, `Class(Vec<ClassType>, bool)`, `Any`. `ClassType`
+  (`Range(char,char)` / `Single(char)`) lives here too.
+- [src/parser/mod.rs](src/parser/mod.rs) — `parse_star` renamed
+  `parse_repetition`, generalized to a `loop`/`match` over `*`/`+`/`?`, each
+  with an optional trailing `?` for laziness; `parse_class`; `\`-escape
+  handling in `parse_atom`. `ParserError` gained `InvalidRange(char, char)`.
+- [src/machine/class.rs](src/machine/class.rs) — new file: `Class` (the
+  compiled form — `instructions: Vec<ClassInstruction>`, `negated: bool`,
+  `exit: State`) and `ClassInstruction` (`Range`/`Single`, the machine's own
+  type, translated from `ClassType` via `From<&ClassType>`).
+- [src/machine/program.rs](src/machine/program.rs) — `Instruction`/
+  `ValidInstruction` gained a `Class(Class)` variant. `ValidInstruction`
+  **lost `Copy`** (kept `Clone`) — see below.
+- [src/machine/mod.rs](src/machine/mod.rs) — `compile_plus`,
+  `compile_lazy_star/plus/question`, `compile_question`, `compile_class`.
+- [src/regex/mod.rs](src/regex/mod.rs) — `step`/`follow` changed from copying
+  `program[*i]` by value to borrowing `&program[*i]`, to accommodate the
+  non-`Copy` `Class` variant.
 
-Scope, roughly in dependency order:
+**`+` and `?` compile as gadgets, not desugared.** The Lesson 1 open question
+(`A+ → AA*` vs. new AST variants) was settled in favor of new variants, and
+it's cheaper than it looks: `compile_plus`/`compile_question` each compile the
+child fragment **once** and reuse one of its two holes as the decision point,
+mirroring `compile_star`'s existing `Split`-based shape instead of literally
+duplicating the child subtree.
 
-- `+` and `?` — pure desugaring, the decision left open since Lesson 1
-  (`A+ → AA*`, `A? → A|ε`). Note desugaring `A+` duplicates the sub-AST; whether
-  to desugar in the parser or add compile arms is the real question.
-- `*?`, `+?`, `??` — the lazy flag. Grammar shape already discussed:
-  `repetition := atom QUANT*` with `QUANT := ('*' | '+' | '?') '?'?`. The
-  trailing `?` may only follow a quantifier, never a bare atom; `a?` (a
-  quantifier) and `a*?` (a modifier on a quantifier) are different grammar
-  objects sharing a character. Compiles to swapped `Split` fields and nothing
-  else.
-- `.` — already established in Lesson 1 as its own node, a compression of an
-  alternation over the whole alphabet, and the first member of the
-  character-class family.
-- `\` escapes — the `todo!()` in `parse_atom`.
-- Character classes `[abc]`, `[a-z]`, `[^a]` — where the cursor-not-lexer
-  decision from Lesson 1 earns itself, since `]`, `-`, and `^` all change
-  meaning by position.
+- `compile_star`: entry is a **new** `Split` (so zero iterations can skip the
+  child); `frag.exit` is overwritten with `Jump(start)`, looping back.
+- `compile_plus`: entry is `frag.start` itself (at least one iteration is
+  mandatory — no way to skip the child); `frag.exit`'s hole is overwritten
+  **directly** with `Split(start, exit)` — no separate `Jump`, the hole just
+  becomes the decision point.
+- `compile_question`: entry is a **new** `Split(frag.start, exit)`;
+  `frag.exit` is **reused as-is**, untouched, as the fragment's own exit —
+  both the "took it" and "skipped it" paths already converge there.
 
-Open design question to raise when it comes up: `Consume(char, State)` holds a
-single `char`. A class is a *set* of chars, so either the instruction grows a
-predicate/set variant or classes compile to alternation chains (correct but
-`n` states per class).
+Net: `+` costs one extra state over its child (same as `*`), `?` costs one
+extra state too, and neither ever clones an AST subtree or duplicates program
+states. The desugaring alternative (`AA*`, `A|ε`) was rejected specifically
+because `+`'s two copies of `A` would need `Ast: Clone`, and that cost
+compounds under stacking (`a+++...`).
+
+**Lazy quantifiers are the Lesson 4 principle applied a second time, and cost
+one line each.** `LazyStar`/`LazyPlus`/`LazyQuestion` compile identically to
+their greedy siblings, with the `Split`'s two arguments swapped —
+`Split(frag.start, exit)` becomes `Split(exit, frag.start)`. Nothing in
+`regex/mod.rs` changes at all; laziness is entirely a compile-time decision
+baked into instruction layout, since `step`/`closure`/`follow` just walk
+whatever `Split` they're handed, in ranked order.
+
+**`a??` is genuinely ambiguous, and the grammar picks one reading.**
+`QUANT := ('*'|'+'|'?') '?'?` means the lazy-flag `?` and a second, stacked `?`
+quantifier share the exact same two characters. The parser always tries to
+consume the lazy suffix first, so `a??` parses as `LazyQuestion(a)`, never
+`Question(Question(a))`. This retired the `stacked_question` test (`a??` used
+to assert the stacked reading) — but nothing was lost: `Question(Question(a))`
+was always the same *language* as `Question(a)`, stacking any quantifier onto
+itself never changes what strings match, only the tree shape. The stacked
+reading is still reachable via explicit grouping (`(a?)?`), just not via the
+bare `a??` spelling anymore.
+
+**Character classes are a second, independent grammar living inside `[...]`,
+with no lexer to lean on.** `class_item := CHAR '-' CHAR | CHAR`, and `^`/`-`/
+`]` all mean different things depending on position:
+
+- `^` negates only as the very first character of the class.
+- `-` forms a range only when there's an **unconsumed** character immediately
+  before it and one immediately after — general enough that `[--z]` is one
+  range (`-` through `z`, since the first `-` is still the pending value when
+  the second is read) while `[a-d-z]`'s second `-` is literal (`d` was already
+  spent as the first range's end and can't be reused).
+- `]` always closes; the PCRE quirk where a leading `]` is read as a literal
+  member was deliberately **not** implemented.
+- Range validity (`start <= end`, by Unicode scalar value) is checked **per
+  item**, never across the whole class — `[za-az]` only ever compares the
+  middle `a-a`, the two `z`s are never candidates.
+- `(`/`)` have no meaning inside a class — they're just characters, the
+  grammar never gives them a sub-expression slot the way `parse_atom`'s `(`
+  does. This is also why `[(ab)-(cd)]` is a parse error: not because groups
+  are special-cased, but because the flat class grammar composes `)-(` into an
+  *inverted* range (`)` is 0x29, `(` is 0x28).
+
+**Negation is one bool on the whole class, not a per-item flag — and this was
+a real, caught bug, not a style call.** The first version had
+`ClassType::NegatedSingle`/`NegatedRange` variants, negation attached
+per-item. That's mathematically wrong the moment a negated class has 2+ items:
+De Morgan's says the complement of a *union* is the *intersection* of
+complements, not a union of complements. Concretely, `[^abc]` built from three
+`NegatedSingle`s, tested by the natural "does `c` match any item" union, would
+say `'a'` **is** a member — `'a' != 'b'` is true, so `NegatedSingle('b')`
+"matches." Fixed by hoisting `negated: bool` onto `Ast::Class`/`Class` as a
+whole, computing membership as a plain union scan, and inverting **once**, at
+the very end (`if self.negated { !matched } else { matched }`) — the actual
+De Morgan's-correct operation. Same "illegal states unrepresentable" move as
+`ValidProgram`'s hole-elimination in Lesson 3: the type no longer permits a
+`Vec` where items disagree about whether the class is negated.
+
+**A second, independent bug in the same function:** `start` (tracking "is this
+the first character of the class, so can `^` still negate") was only ever
+reset to `false` on the one code path that falls through to the bottom of the
+`loop` — every other branch (`continue`s for pushing a single char, or for the
+negation trigger itself) skipped it. Result: `^` could wrongly trigger
+negation anywhere in the class as long as no range had formed yet — `[a^]`
+came out as "not a" instead of the literal set `{a, ^}`. Fixed by setting
+`start = false` explicitly on every branch, not relying on fall-through.
+
+**The `Copy` question resolved simpler than the plan going in.** The concern:
+`ValidInstruction` was `Copy` (letting `regex/mod.rs` write
+`let inst = program[i];` everywhere), and a `Class` holding a `Vec` can't be
+`Copy`. The original plan was a side-table + `usize` index (mirroring "State
+is an index, not a pointer" one level up) — but it turned out unnecessary.
+`step`/`follow` only ever *read* an instruction, never need to own one, so
+switching to `let inst = &program[*i];` and dereferencing the small `Copy`
+fields at their use sites (`*t`, `*j`) works directly, with `ValidInstruction`
+just dropping `Copy` and keeping `Clone`. Simpler than adding a pool +
+indirection layer.
+
+**`HashSet` was considered twice for class membership and rejected both
+times, on the same grounds.** Once for the whole `Vec<ClassType>`, once
+narrower (collapsing repeated `Single`s into one `Set(HashSet<char>)`
+variant, deduplicating `[aaaaaaabbbbbbbcccccc]` for free). Rejected because:
+real classes are small (a `HashSet`'s hashing + pointer-chasing overhead tends
+to lose to a short contiguous `Vec` scan at that scale), ranges can't live in
+a `HashSet<char>` at all without expanding them (the exact blowup already
+rejected for `.`), and — mirroring the project's own precedent for the
+`SeenSet` stamp/generation trick — deferred until an actual benchmark
+complains, not built preemptively.
+
+**`\` escapes are deliberately the naive version: consume the next character
+unconditionally as a literal.** No `\n`/`\t` translation, no `\d`/`\w`/`\s`
+shorthand classes — both are believed cheap to add later (new `match` arms
+inside the same `\` branch in `parse_atom`, reusing `Ast::Literal`/
+`Ast::Class` which already exist end-to-end) rather than a refactor risk. `\`
+at end of input is `ParserError::UnexpectedEndOfInput`, not a crash.
+
+**Concepts covered:**
+
+- Every quantifier gadget (`*`, `+`, `?`, and their lazy twins) reduces to the
+  same primitive: compile the child once, add a `Split`, decide whether entry
+  is the `Split` or the child's own start, decide whether the exit edge loops
+  back. Not three unrelated constructions.
+- Stacking any quantifier onto itself is always language-redundant
+  (`(a+)*`, `a?*`, `Question(Question(a))` all just restate an existing
+  language in a more roundabout tree shape) — this is what let the `a??`
+  grammar collision resolve in favor of laziness at zero real cost.
+- Kleene's `∅` (the empty language, deliberately unexpressible by the
+  top-level `Ast` since Lesson 2) has a *local*, class-scoped analogue: an
+  empty character class `[]` would be a `Consume`-like atom that can never
+  advance for any input, whether or not the top-level language can express
+  `∅` directly. Left open, see below.
+- Match ergonomics (Rust): matching `&Instruction` against a non-reference
+  pattern shifts *every* binding in that arm to by-reference by default, not
+  just the field that forced the change — dereferencing at use (`*t`) or
+  matching `*inst` with a targeted `ref` on the one non-`Copy` field are both
+  valid ways to opt back into by-value binding for the rest.
+- A backtracking engine (PCRE) and a leftmost-first-*semantics* engine (this
+  one) are different claims: the latter targets the same observable matching
+  behavior as Perl/PCRE without their implementation strategy, and cannot
+  reach feature parity (backreferences, lookaround) because that strategy is
+  exactly what those features need. Syntax conventions (the `]`-first quirk,
+  permissive empty branches) are separate, lower-stakes decisions from
+  matching semantics.
+
+**Bugs that surfaced (both in `parse_class`):**
+
+- Per-item negation variants violating De Morgan's for any class with 2+
+  items (see above).
+- `start` not reset on most branches due to `continue` skipping the
+  fall-through line (see above).
+
+**Teaching notes for next time:**
+
+- Hand-tracing individual `[...]` inputs against the exact grammar
+  (`[a-d-z]`, `[--z]`, `[(ab)-(cd)]`, `[za-az]`) is what caught both bugs and
+  pinned down every position-sensitivity rule — the same workflow that's
+  worked every lesson so far, now applied to a second grammar nested inside
+  the first.
+- A reference doc ([character-classes.md](character-classes.md), written to
+  the repo root) was useful as a standing spec to implement against and check
+  drift against later — worth doing again for anchors/`{n,m}` if the rule set
+  gets similarly fiddly.
+- He caught his own bugs and proposed his own fixes for both the negation
+  redesign and the `Copy`-via-borrowing simplification — the tutoring loop is
+  increasingly "raise the concern, let him find the shape of the fix," not
+  "here's the fix."
+- Confusions worth watching for again: "is `a?` the same as `a*?`" (quantifier
+  vs. modifier-on-a-quantifier sharing a character — the exact ambiguity that
+  later broke `a??`), and reading "PCRE-style" as "we're building PCRE" rather
+  than "borrowing a syntax convention while the matching strategy stays
+  fundamentally different."
+
+**Known open items** (not bugs — raise when relevant):
+
+- **The empty class `[]` — flagged as the most important open item to resolve
+  first in 5.b.** Currently legal by accident, not decision: `parse_class`
+  returns `Ok(Ast::Class(vec![], negation))` the moment it sees `]` with zero
+  items collected, since nothing currently requires `class_item+` over
+  `class_item*`. Needs a deliberate choice (error vs. legal-and-always-
+  failing), and if legal, `[^]` (negated empty class) becomes an interesting
+  edge — "not in the empty set" is every character, the same language as `.`
+  reached by a completely different route.
+- `$`/`^` anchors — a structurally new instruction category: zero-width,
+  doesn't consume input, but (unlike `Jump`/`Split`) needs to test *position*
+  (start/end of input) and die like a failed `Consume` if the assertion
+  doesn't hold. Not a variation on an existing instruction.
+- `{n,m}` bounded repetition — still fully open, no grammar or compile shape
+  discussed yet.
+- The dead code in `Class::match_c`:
+  `if !self.negated && matched { break; }` can never fire, since the inner
+  `break` inside each match arm already exits the loop the moment `matched`
+  becomes `true`. Harmless, worth deleting whenever that function is touched
+  again.
+- Two `full_match` bugs remain deliberately unfixed from Lesson 4, and a
+  Lesson 5 addition demonstrated the second one has the same root cause as the
+  first: deriving `full_match` from `find`'s leftmost-*first* cut is unsound
+  whenever the highest-priority path is short.
+  `a_higher_priority_short_branch_must_not_hide_a_full_match`
+  (alternation-driven) and `lazy_quantifiers_expose_the_same_full_match_bug`
+  (laziness-driven, e.g. `a??` vs `"a"`) are both red on purpose.
+- All of Lesson 3/4's older open items (sparse sets, `clist`/`nlist` reuse,
+  stamp/generation, unanchored search, `(start,end)` spans, capture groups)
+  are still open too — untouched by Lesson 5.a.
+
+### Lesson 5.b — anchors, bounded repetition, and the empty class (next)
+
+Picks up exactly where 5.a stopped, in the priority order set at the end of
+the session:
+
+1. **Resolve `[]` first.** Decide `class_item+` vs `class_item*`
+   deliberately, update `parse_class` accordingly, and if empty classes are
+   made legal, decide whether that's worth exploiting anywhere (the
+   `[^]` ≡ `.` connection is cute but not obviously useful for anything else
+   yet).
+2. **`$`/`^` anchors.** Needs a new instruction category (a zero-width
+   position assertion, not a consuming instruction and not a free
+   `Jump`/`Split`) — this is genuinely new theory for the lesson sequence, not
+   just more parser/compiler plumbing like most of 5.a was. `^` is already
+   overloaded (class negation vs. anchor, resolved by the same
+   "position decides meaning" theme running through this whole lesson) —
+   expect that collision to need explicit handling in `parse_atom`, the same
+   way `?` needed it for lazy quantifiers.
+3. **`{n,m}`** (and `{n}`, `{n,}`, `{,m}`) — no design work done yet at all.
+   Generalizes `*`/`+`/`?` (`{0,}=*`, `{1,}=+`, `{0,1}=?`), so the compile
+   shape is probably another variation on the "compile the child once, wire a
+   decision point" gadget family from 5.a, but the *parsing* is new: it needs
+   to read and validate a bounded integer count, not just a single quantifier
+   character.
 
 ## Protocol for agents
 

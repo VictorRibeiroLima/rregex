@@ -133,6 +133,33 @@ fn class_composed_with_plus() {
 }
 
 #[test]
+fn escaped_metacharacter_matches_only_the_literal() {
+    assert!(matches("a\\*b", "a*b"));
+    assert!(!matches("a\\*b", "ab")); // '*' is required now, not optional
+    assert!(!matches("a\\*b", "a**b"));
+}
+
+#[test]
+fn dangling_escape_fails_to_compile() {
+    assert!(Regex::compile("a\\").is_err());
+}
+
+#[test]
+fn a_real_identifier_matcher() {
+    // Everything from this lesson working together on an actually-useful
+    // pattern -- the same rule every programming language uses to recognize
+    // a variable/function name: letters or '_' first, then any run of
+    // letters/digits/'_'.
+    let identifier = "[a-zA-Z_][a-zA-Z0-9_]*";
+    assert!(matches(identifier, "myVariable"));
+    assert!(matches(identifier, "_private"));
+    assert!(matches(identifier, "x1"));
+    assert!(!matches(identifier, "1x")); // can't start with a digit
+    assert!(!matches(identifier, "my-variable")); // hyphen isn't in the class
+    assert!(matches(identifier, "a"));
+}
+
+#[test]
 fn star_matches_zero_or_more() {
     assert!(matches("a*", ""));
     assert!(matches("a*", "a"));

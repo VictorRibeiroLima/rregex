@@ -685,6 +685,20 @@ mod test {
     }
 
     #[test]
+    fn escaped_literal_compiles_like_any_other_literal() {
+        // "\*" and a bare literal 'a' produce the identical shape --
+        // compile_literal can't tell, and doesn't need to, whether the parser
+        // got this char via an escape. The distinction is fully absorbed by
+        // the time the AST exists.
+        let ast = parse("\\*").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 2);
+        assert_eq!(machine.program[0], ValidInstruction::Consume('*', 1));
+        assert_eq!(machine.program[1], ValidInstruction::Match);
+    }
+
+    #[test]
     fn stacked_stars_build_an_epsilon_loop() {
         /* the regex: "a**"  ->  Star(Star(Literal('a')))
 

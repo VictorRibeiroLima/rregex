@@ -177,6 +177,19 @@ fn the_classic_html_tag_example() {
 }
 
 #[test]
+fn escaped_metacharacters_match_as_literals_not_operators() {
+    // "a\+" is literal "a" then literal "+" -- a completely different
+    // language from "a+" (one-or-more 'a'), even though they differ by one
+    // backslash.
+    assert_eq!(find("a\\+", "a+"), Some(2));
+    assert_eq!(find("a\\+", "aaa"), None); // no '+' anywhere for the literal to match
+    // Same contrast for '.': escaped, it demands an actual dot rather than
+    // any character.
+    assert_eq!(find("a\\.b", "a.b"), Some(3));
+    assert_eq!(find("a\\.b", "axb"), None);
+}
+
+#[test]
 fn find_through_a_star_of_an_alternation() {
     assert_eq!(find("(a|b)*c", "c"), Some(1));
     assert_eq!(find("(a|b)*c", "bbabc"), Some(5));

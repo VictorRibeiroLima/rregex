@@ -121,7 +121,12 @@ fn parse_atom(cursor: &mut Cursor) -> Result<Ast, ParserError> {
             }
         }
         Some('\\') => {
-            todo!("escape sequences");
+            cursor.next();
+            let escaped = cursor.next();
+            match escaped {
+                None => Err(ParserError::UnexpectedEndOfInput),
+                Some(c) => Ok(Ast::Literal(c)),
+            }
         }
         Some(c) => {
             cursor.next();

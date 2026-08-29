@@ -20,7 +20,7 @@ never matters — `[abc]` and `[cba]` are the same set.
 ## The three position-sensitive characters
 
 There is no lexer (Lesson 1), so `^`, `-`, and `]` don't have fixed meanings —
-their meaning depends entirely on *where* they sit. This is the whole reason
+their meaning depends entirely on _where_ they sit. This is the whole reason
 character classes are their own parsing problem.
 
 ### `^` — negation
@@ -28,7 +28,7 @@ character classes are their own parsing problem.
 Only negates when it is the **very first character** right after `[`.
 Anywhere else, it's a literal `^`.
 
-- `[^abc]` — negated: any char that is *not* `a`, `b`, or `c`.
+- `[^abc]` — negated: any char that is _not_ `a`, `b`, or `c`.
 - `[a^bc]` — not negated: the literal set `{a, ^, b, c}`.
 
 ### `-` — range operator
@@ -39,7 +39,7 @@ edge of the class.
 
 The general rule (not two separate rules for "first" and "last"): a `-`
 becomes a range operator **only if** there is an unconsumed character
-immediately before it *and* a character immediately after it (and that
+immediately before it _and_ a character immediately after it (and that
 following character isn't `]`). If either side is missing, `-` is read as an
 ordinary literal character instead.
 
@@ -77,7 +77,7 @@ is a **parse error**, not a silently-empty range and not an auto-swap.
 
 ### Multiple ranges: `[a-dm-z]`
 
-Perfectly fine — a class is a *sequence* of items. `a-d` closes when the peek
+Perfectly fine — a class is a _sequence_ of items. `a-d` closes when the peek
 after `d` isn't `-`; a fresh item then starts at `m`, and `m-z` forms the
 second range. Result: `{a..d} ∪ {m..z}`.
 
@@ -99,7 +99,7 @@ Groups don't exist inside classes in any regex flavor — `class_item` has no
 grammar slot for a sub-expression the way `parse_atom`'s `(` case does. So
 `(` and `)` are just ordinary characters here. Walking it: `(`, `a`, `b` are
 three standalone items, then `)` is followed by `-` followed by `(`, so it
-reads as the range `)-(``. Since `)` (0x29) > `(` (0x28), that's an
+reads as the range ` )-(``. Since  `)`(0x29) >`(` (0x28), that's an
 **inverted range — parse error**. Not because groups were used, but because
 the flat class grammar happens to compose into an inverted range here.
 
@@ -114,7 +114,7 @@ involved.
 ## Semantics of negation
 
 `[^...]` matches any character **not** in the set — the complement, over the
-*whole alphabet* (every `char`), not just some ASCII subset.
+_whole alphabet_ (every `char`), not just some ASCII subset.
 
 Consistency with `.`: this engine's `.` has **no hidden exclusions** — it
 matches literally everything, newline included (see `dot_has_no_special_case_for_whitespace_or_newline`
@@ -124,37 +124,18 @@ except the literal `a`.
 
 ## Examples
 
-| Pattern     | Input   | Matches? | Why |
-|---|---|---|---|
-| `[abc]`     | `"a"`   | yes | `a` is a member |
-| `[abc]`     | `"d"`   | no  | not in `{a,b,c}` |
-| `[a-z]`     | `"m"`   | yes | in range |
-| `[a-z]`     | `"M"`   | no  | uppercase is a different scalar value, out of range |
-| `[^a-z]`    | `"M"`   | yes | negated: `M` is not in `a-z` |
-| `[^a-z]`    | `"m"`   | no  | `m` *is* in `a-z`, so negation excludes it |
-| `[ab-df]`   | `"e"`   | no  | set is `{a, b, c, d, f}` — `e` is the gap |
-| `[a^bc]`    | `"^"`   | yes | `^` not first, so it's a literal member |
-| `[-az]`     | `"-"`   | yes | leading `-` is literal |
-| `[a-d-z]`   | `"-"`   | yes | see trace above — `-` is its own member here |
-| `[a-d-z]`   | `"e"`   | no  | `e` is in none of `{a..d}`, `{-}`, `{z}` |
-| `[a-z]+`    | `"cab"` | full match | classes compose with quantifiers like any atom |
-| `[abc]?d`   | `"d"`   | yes | the class is optional, same as any atom under `?` |
-
-## Still open (your calls, not yet decided)
-
-- **Is `[]` (empty class) legal?**
-  - If `class_item+` (at least one required): `[]` is a parse error — the
-    class body can't be empty.
-  - If `class_item*` (zero allowed): `[]` is a legal, always-failing atom —
-    it can never advance, for any input. This is the *local*, class-scoped
-    version of Kleene's `∅`, which the top-level `Ast` deliberately can't
-    express (Lesson 2) — a class *can* express it naturally, if you allow it.
-  - Neat consequence if you allow it: `[^]` (negated empty class) would mean
-    "not in the empty set" — i.e. *every* character. That's the exact same
-    language as `.`, reached by a completely different route. Not a reason
-    you have to allow empty classes, just a fact worth knowing before you
-    decide.
-- **Instruction representation** — covered in chat, not repeated here:
-  dedicated `ConsumeClass`-style instruction, item list lives in a side table
-  indexed by `usize` (not inline in the instruction) to keep `ValidInstruction`
-  `Copy`.
+| Pattern   | Input   | Matches?   | Why                                                 |
+| --------- | ------- | ---------- | --------------------------------------------------- |
+| `[abc]`   | `"a"`   | yes        | `a` is a member                                     |
+| `[abc]`   | `"d"`   | no         | not in `{a,b,c}`                                    |
+| `[a-z]`   | `"m"`   | yes        | in range                                            |
+| `[a-z]`   | `"M"`   | no         | uppercase is a different scalar value, out of range |
+| `[^a-z]`  | `"M"`   | yes        | negated: `M` is not in `a-z`                        |
+| `[^a-z]`  | `"m"`   | no         | `m` _is_ in `a-z`, so negation excludes it          |
+| `[ab-df]` | `"e"`   | no         | set is `{a, b, c, d, f}` — `e` is the gap           |
+| `[a^bc]`  | `"^"`   | yes        | `^` not first, so it's a literal member             |
+| `[-az]`   | `"-"`   | yes        | leading `-` is literal                              |
+| `[a-d-z]` | `"-"`   | yes        | see trace above — `-` is its own member here        |
+| `[a-d-z]` | `"e"`   | no         | `e` is in none of `{a..d}`, `{-}`, `{z}`            |
+| `[a-z]+`  | `"cab"` | full match | classes compose with quantifiers like any atom      |
+| `[abc]?d` | `"d"`   | yes        | the class is optional, same as any atom under `?`   |
