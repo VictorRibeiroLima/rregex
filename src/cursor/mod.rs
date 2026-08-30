@@ -18,7 +18,6 @@ impl Cursor {
         Some(self.input[self.pos])
     }
 
-    #[allow(dead_code)]
     pub fn peek_at(&self, offset: usize) -> Option<char> {
         let pos = self.pos + offset;
         if pos >= self.input.len() {

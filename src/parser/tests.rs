@@ -238,11 +238,11 @@ fn simple_class() {
     assert_eq!(
         ast("[abc]"),
         Ast::Class(
-            vec![
+            ClassSet::from_vec(vec![
                 ClassType::Single('a'),
                 ClassType::Single('b'),
                 ClassType::Single('c')
-            ],
+            ],),
             false
         )
     );
@@ -252,7 +252,7 @@ fn simple_class() {
 fn simple_range_class() {
     assert_eq!(
         ast("[a-c]"),
-        Ast::Class(vec![ClassType::Range('a', 'c')], false)
+        Ast::Class(ClassSet::from_vec(vec![ClassType::Range('a', 'c')]), false)
     );
 }
 
@@ -261,11 +261,11 @@ fn simple_negated_class() {
     assert_eq!(
         ast("[^abc]"),
         Ast::Class(
-            vec![
+            ClassSet::from_vec(vec![
                 ClassType::Single('a'),
                 ClassType::Single('b'),
                 ClassType::Single('c')
-            ],
+            ]),
             true
         )
     );
@@ -275,7 +275,7 @@ fn simple_negated_class() {
 fn simple_negated_range_class() {
     assert_eq!(
         ast("[^a-c]"),
-        Ast::Class(vec![ClassType::Range('a', 'c')], true)
+        Ast::Class(ClassSet::from_vec(vec![ClassType::Range('a', 'c')]), true)
     );
 }
 
@@ -291,7 +291,10 @@ fn caret_is_literal_when_not_first() {
     // in the class (not just position 0) wrongly triggers negation.
     assert_eq!(
         ast("[a^]"),
-        Ast::Class(vec![ClassType::Single('a'), ClassType::Single('^')], false)
+        Ast::Class(
+            ClassSet::from_vec(vec![ClassType::Single('a'), ClassType::Single('^')]),
+            false
+        )
     );
 }
 
@@ -302,11 +305,11 @@ fn caret_only_negates_the_whole_class_once() {
     assert_eq!(
         ast("[^^ab]"),
         Ast::Class(
-            vec![
+            ClassSet::from_vec(vec![
                 ClassType::Single('^'),
                 ClassType::Single('a'),
                 ClassType::Single('b')
-            ],
+            ]),
             true
         )
     );
@@ -317,22 +320,22 @@ fn leading_and_trailing_dash_are_literal() {
     assert_eq!(
         ast("[-az]"),
         Ast::Class(
-            vec![
+            ClassSet::from_vec(vec![
                 ClassType::Single('-'),
                 ClassType::Single('a'),
                 ClassType::Single('z')
-            ],
+            ]),
             false
         )
     );
     assert_eq!(
         ast("[az-]"),
         Ast::Class(
-            vec![
+            ClassSet::from_vec(vec![
                 ClassType::Single('a'),
                 ClassType::Single('z'),
                 ClassType::Single('-')
-            ],
+            ]),
             false
         )
     );
@@ -346,7 +349,7 @@ fn two_leading_dashes_form_a_range() {
     // available on one side to pair with, and here there is one.
     assert_eq!(
         ast("[--z]"),
-        Ast::Class(vec![ClassType::Range('-', 'z')], false)
+        Ast::Class(ClassSet::from_vec(vec![ClassType::Range('-', 'z')]), false)
     );
 }
 
@@ -358,11 +361,11 @@ fn dash_after_a_finished_range_is_literal() {
     assert_eq!(
         ast("[a-d-z]"),
         Ast::Class(
-            vec![
+            ClassSet::from_vec(vec![
                 ClassType::Range('a', 'd'),
                 ClassType::Single('-'),
                 ClassType::Single('z')
-            ],
+            ]),
             false
         )
     );
@@ -373,7 +376,7 @@ fn single_and_range_union_in_one_class() {
     assert_eq!(
         ast("[ab-z]"),
         Ast::Class(
-            vec![ClassType::Single('a'), ClassType::Range('b', 'z')],
+            ClassSet::from_vec(vec![ClassType::Single('a'), ClassType::Range('b', 'z')]),
             false
         )
     );
@@ -387,11 +390,7 @@ fn range_validity_is_checked_per_item_not_across_the_class() {
     assert_eq!(
         ast("[za-az]"),
         Ast::Class(
-            vec![
-                ClassType::Single('z'),
-                ClassType::Range('a', 'a'),
-                ClassType::Single('z')
-            ],
+            ClassSet::from_vec(vec![ClassType::Single('z'), ClassType::Range('a', 'a')]), //Only one single('z') because this is a set
             false
         )
     );
@@ -404,11 +403,11 @@ fn parens_are_literal_inside_a_class() {
     assert_eq!(
         ast("[(a)]"),
         Ast::Class(
-            vec![
+            ClassSet::from_vec(vec![
                 ClassType::Single('('),
                 ClassType::Single('a'),
                 ClassType::Single(')')
-            ],
+            ]),
             false
         )
     );
@@ -453,13 +452,13 @@ fn mixed_class() {
     assert_eq!(
         ast("[a-c123x-z]"),
         Ast::Class(
-            vec![
+            ClassSet::from_vec(vec![
                 ClassType::Range('a', 'c'),
                 ClassType::Single('1'),
                 ClassType::Single('2'),
                 ClassType::Single('3'),
                 ClassType::Range('x', 'z')
-            ],
+            ]),
             false
         )
     );

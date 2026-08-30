@@ -7,9 +7,9 @@ pub enum Instruction {
     Hole,
     Consume(char, State),
     ConsumeAny(State),
+    ConsumeClass(Class),
     Jump(State),
     Split(State, State),
-    Class(Class),
     Match,
 }
 
@@ -17,9 +17,9 @@ pub enum Instruction {
 pub enum ValidInstruction {
     Consume(char, State),
     ConsumeAny(State),
+    ConsumeClass(Class),
     Jump(State),
     Split(State, State),
-    Class(Class),
     Match,
 }
 
@@ -39,7 +39,9 @@ impl ValidProgram {
                 Instruction::ConsumeAny(s) => valid_program.push(ValidInstruction::ConsumeAny(s)),
                 Instruction::Jump(s) => valid_program.push(ValidInstruction::Jump(s)),
                 Instruction::Split(s1, s2) => valid_program.push(ValidInstruction::Split(s1, s2)),
-                Instruction::Class(class) => valid_program.push(ValidInstruction::Class(class)),
+                Instruction::ConsumeClass(class) => {
+                    valid_program.push(ValidInstruction::ConsumeClass(class))
+                }
                 Instruction::Match => valid_program.push(ValidInstruction::Match),
             }
         }

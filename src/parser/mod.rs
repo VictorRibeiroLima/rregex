@@ -1,6 +1,6 @@
 use crate::{
     cursor::Cursor,
-    parser::ast::{Ast, ClassType},
+    parser::ast::{Ast, ClassSet, ClassType},
 };
 
 pub mod ast;
@@ -136,14 +136,14 @@ fn parse_atom(cursor: &mut Cursor) -> Result<Ast, ParserError> {
 }
 
 fn parse_class(cursor: &mut Cursor) -> Result<Ast, ParserError> {
-    let mut classes = vec![]; // Placeholder for actual class parsing logic]
+    let mut class = ClassSet::new();
     let mut negation = false;
     let mut start = true;
     loop {
         let peek = cursor.peek();
         match peek {
             None => return Err(ParserError::UnexpectedEndOfInput),
-            Some(']') => return Ok(Ast::Class(classes, negation)),
+            Some(']') => return Ok(Ast::Class(class, negation)),
             Some(c) => {
                 cursor.next();
                 if c == '^' && start {
@@ -151,26 +151,25 @@ fn parse_class(cursor: &mut Cursor) -> Result<Ast, ParserError> {
                     start = false;
                     continue;
                 }
+                start = false;
 
                 let n = match cursor.peek() {
                     None | Some(']') => {
-                        classes.push(ClassType::Single(c));
-                        start = false;
+                        class.push(ClassType::Single(c));
                         continue;
                     }
                     Some(n) => n,
                 };
 
                 if n != '-' {
-                    classes.push(ClassType::Single(c));
-                    start = false;
+                    class.push(ClassType::Single(c));
                     continue;
                 }
 
                 let n2 = match cursor.peek_at(1) {
                     None | Some(']') => {
-                        classes.push(ClassType::Single(c));
-                        start = false;
+                        class.push(ClassType::Single(c));
+
                         continue;
                     }
                     Some(n) => n,
@@ -182,10 +181,9 @@ fn parse_class(cursor: &mut Cursor) -> Result<Ast, ParserError> {
                 if c > n2 {
                     return Err(ParserError::InvalidRange(c, n2));
                 }
-                classes.push(ClassType::Range(c, n2));
+                class.push(ClassType::Range(c, n2));
             }
         }
-        start = false;
     }
 }
 

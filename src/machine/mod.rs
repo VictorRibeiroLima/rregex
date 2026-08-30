@@ -79,7 +79,7 @@ fn compile_class(c: &Vec<ClassType>, negated: bool, program: &mut Program) -> Fr
     let exit = start + 1;
     let class = Class::new(instructions, negated, exit);
 
-    program.push(Inst::Class(class));
+    program.push(Inst::ConsumeClass(class));
     program.push(Inst::Hole);
     Fragment { start, exit }
 }
@@ -614,7 +614,7 @@ mod test {
         );
         assert_eq!(machine.start, 0);
         assert_eq!(machine.program.len(), 2);
-        assert_eq!(machine.program[0], ValidInstruction::Class(expected));
+        assert_eq!(machine.program[0], ValidInstruction::ConsumeClass(expected));
         assert_eq!(machine.program[1], ValidInstruction::Match);
     }
 
@@ -625,7 +625,7 @@ mod test {
         let expected = Class::new(vec![ClassInstruction::Range('a', 'z')], false, 1);
         assert_eq!(machine.start, 0);
         assert_eq!(machine.program.len(), 2);
-        assert_eq!(machine.program[0], ValidInstruction::Class(expected));
+        assert_eq!(machine.program[0], ValidInstruction::ConsumeClass(expected));
         assert_eq!(machine.program[1], ValidInstruction::Match);
     }
 
@@ -636,7 +636,7 @@ mod test {
         let expected = Class::new(vec![ClassInstruction::Single('a')], true, 1);
         assert_eq!(machine.start, 0);
         assert_eq!(machine.program.len(), 2);
-        assert_eq!(machine.program[0], ValidInstruction::Class(expected));
+        assert_eq!(machine.program[0], ValidInstruction::ConsumeClass(expected));
         assert_eq!(machine.program[1], ValidInstruction::Match);
     }
 
@@ -654,7 +654,7 @@ mod test {
         );
         assert_eq!(machine.start, 0);
         assert_eq!(machine.program.len(), 4);
-        assert_eq!(machine.program[0], ValidInstruction::Class(expected));
+        assert_eq!(machine.program[0], ValidInstruction::ConsumeClass(expected));
         assert_eq!(machine.program[1], ValidInstruction::Jump(2));
         assert_eq!(machine.program[2], ValidInstruction::Consume('c', 3));
         assert_eq!(machine.program[3], ValidInstruction::Match);
@@ -679,7 +679,7 @@ mod test {
         );
         assert_eq!(machine.start, 0);
         assert_eq!(machine.program.len(), 3);
-        assert_eq!(machine.program[0], ValidInstruction::Class(expected));
+        assert_eq!(machine.program[0], ValidInstruction::ConsumeClass(expected));
         assert_eq!(machine.program[1], ValidInstruction::Split(0, 2));
         assert_eq!(machine.program[2], ValidInstruction::Match);
     }

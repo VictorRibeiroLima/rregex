@@ -106,7 +106,7 @@ impl Regex {
                         next.traverse(*j);
                     }
                 }
-                Instruction::Class(class) => {
+                Instruction::ConsumeClass(class) => {
                     if class.match_c(c) {
                         let j = class.exit();
                         if next.insert(j) {
@@ -152,7 +152,7 @@ impl Regex {
             Instruction::Consume(_, _)
             | Instruction::Match
             | Instruction::ConsumeAny(_)
-            | Instruction::Class(_) => {
+            | Instruction::ConsumeClass(_) => {
                 seen_set.traverse(i);
             }
         };
