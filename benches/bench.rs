@@ -14,7 +14,19 @@ fn parse(c: &mut Criterion) {
 fn match_r(c: &mut Criterion) {
     let identifier = "[a-zA-Z_][a-zA-Z0-9_]*";
     let regex = rregex::regex::Regex::compile(identifier).unwrap();
-    c.bench_function("match", |b| b.iter(|| regex.find("myVariable").unwrap()));
+    c.bench_function("match short", |b| {
+        b.iter(|| regex.find("myVariable").unwrap())
+    });
+
+    c.bench_function("match long", |b| {
+        b.iter(|| {
+            regex
+                .find(
+                    "a_very_long_identifier_name_0123456789_abcdefghijklmnopqrstuvwxyz_ABCDEFGHIJKLMNOPQRSTUVWXYZ_end",
+                )
+                .unwrap()
+        })
+    });
 }
 
 struct FlamegraphProfiler {

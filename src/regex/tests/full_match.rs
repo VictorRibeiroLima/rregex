@@ -157,6 +157,10 @@ fn a_real_identifier_matcher() {
     assert!(!matches(identifier, "1x")); // can't start with a digit
     assert!(!matches(identifier, "my-variable")); // hyphen isn't in the class
     assert!(matches(identifier, "a"));
+    assert!(matches(
+        identifier,
+        "a_very_long_identifier_name_0123456789_abcdefghijklmnopqrstuvwxyz_ABCDEFGHIJKLMNOPQRSTUVWXYZ_end"
+    ));
 }
 
 #[test]
