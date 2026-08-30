@@ -3,7 +3,7 @@ use crate::regex::Regex;
 mod cursor;
 mod machine;
 mod parser;
-mod regex;
+pub mod regex;
 
 fn main() {
     let regex = Regex::compile("abc").unwrap();
