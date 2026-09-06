@@ -238,3 +238,39 @@ fn class_unions_singles_and_ranges() {
     assert_eq!(find("[a-c1-3]", "d"), None);
     assert_eq!(find("[a-c1-3]", "4"), None);
 }
+
+#[test]
+fn empty_class_matches_nothing() {
+    // `[]` compiles to a `ConsumeClass` with zero instructions -- still a wall
+    // during closure (it sits in the same Consume-partition as any other
+    // class), but `match_c` returns `false` unconditionally, so the thread
+    // dies at the very next character, exactly like a `Consume` for a
+    // character that never appears in the input. No character survives it, so
+    // it never contributes a match -- this is Kleene's ∅ (the empty
+    // language), not ε: contrast with `find("", "")`, which is `Some(0)`.
+    assert_eq!(find("[]", ""), None);
+    assert_eq!(find("[]", "a"), None);
+    assert_eq!(find("[]", "abc"), None);
+}
+
+#[test]
+fn negated_empty_class_matches_any_single_character() {
+    // De Morgan's applied to zero excluded members: negating an empty union
+    // means every character satisfies "not a member of {}", so `[^]` matches
+    // exactly one character of anything -- the same language as `.`, reached
+    // by negating nothing instead of by the dedicated Any instruction.
+    assert_eq!(find("[^]", ""), None);
+    assert_eq!(find("[^]", "a"), Some(1));
+    assert_eq!(find("[^]", "!"), Some(1));
+}
+
+#[test]
+fn star_of_an_empty_class_still_matches_the_empty_string() {
+    // `Star` always offers the zero-iterations path via its own Split, so
+    // `[]*` matches "" even though `[]` alone can never match one character.
+    // This is the `∅* = ε` Kleene axiom falling out of the NFA construction
+    // for free -- nothing about compile or the matcher needed to know ∅ by
+    // name for the identity to hold.
+    assert_eq!(find("[]*", ""), Some(0));
+    assert_eq!(find("[]*", "a"), Some(0));
+}

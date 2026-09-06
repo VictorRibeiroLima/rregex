@@ -463,3 +463,24 @@ fn mixed_class() {
         )
     );
 }
+
+// --- empty class ------------------------------------------------------------
+//
+// `parse_class`'s loop checks for ']' before pushing anything, so a class
+// that closes with zero items parses -- permissive, same family as the empty
+// branch. `[]` is not sugar for an error: it is the one place in the grammar
+// that gets a spelling for the empty language (Kleene's ∅), as opposed to
+// `Ast::Empty` which is the empty *string* (ε). `Class`'s union-scan-then-
+// negate-once representation already produces the right value for zero items
+// with no special case, so `[^]` -- negate an empty union -- comes out as
+// "matches every character," the same language as `.` by a different route.
+
+#[test]
+fn empty_class_parses_to_a_class_with_no_members() {
+    assert_eq!(ast("[]"), Ast::Class(ClassSet::from_vec(vec![]), false));
+}
+
+#[test]
+fn negated_empty_class_parses_to_a_negated_class_with_no_members() {
+    assert_eq!(ast("[^]"), Ast::Class(ClassSet::from_vec(vec![]), true));
+}
