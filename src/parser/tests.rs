@@ -431,6 +431,9 @@ fn escaped_metacharacter_is_literal() {
     assert_eq!(ast("\\("), lit('('));
     assert_eq!(ast("\\["), lit('['));
     assert_eq!(ast("\\\\"), lit('\\'));
+    // '^' stops falling through to the literal catch-all once it becomes an
+    // anchor -- escaping must still reach a literal caret.
+    assert_eq!(ast("\\^"), lit('^'));
 }
 
 #[test]

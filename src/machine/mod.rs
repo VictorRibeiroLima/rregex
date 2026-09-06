@@ -1,11 +1,16 @@
 use crate::{
-    machine::class::{Class, ClassInstruction},
+    machine::{
+        class::{Class, ClassInstruction},
+        position::Position,
+    },
     parser::ast::{Ast, ClassType},
 };
 use program::{Instruction as Inst, Program, ValidInstruction, ValidProgram};
 
 mod class;
 mod program;
+
+pub mod position;
 
 pub type State = usize;
 pub type Instruction = ValidInstruction;
@@ -55,8 +60,18 @@ fn compile_fragment(ast: &Ast, program: &mut Program) -> Fragment {
         Ast::Question(ast) => compile_question(ast, program),
         Ast::LazyQuestion(ast) => compile_lazy_question(ast, program),
         Ast::Class(c, negated) => compile_class(c, *negated, program),
+        Ast::Anchor(anchor_kind) => compile_anchor(anchor_kind, program),
         Ast::Any => compile_any(program),
     }
+}
+
+fn compile_anchor(anchor_kind: &crate::parser::ast::AnchorKind, program: &mut Program) -> Fragment {
+    let start = program.len();
+    let exit = start + 1;
+    let position = Position::from(anchor_kind);
+    program.push(Inst::ConditionalJump(position, exit));
+    program.push(Inst::Hole);
+    Fragment { start, exit }
 }
 
 fn compile_empty(program: &mut Program) -> Fragment {
@@ -232,7 +247,7 @@ fn compile_any(program: &mut Program) -> Fragment {
 mod test {
     use crate::{
         machine::{
-            Machine, ValidInstruction,
+            Machine, Position, ValidInstruction,
             class::{Class, ClassInstruction},
         },
         parser::{ast::Ast, parse},
@@ -727,6 +742,100 @@ mod test {
         assert_eq!(machine.program[2], ValidInstruction::Split(0, 3));
         assert_eq!(machine.program[3], ValidInstruction::Jump(4));
         assert_eq!(machine.program[4], ValidInstruction::Split(2, 5));
+        assert_eq!(machine.program[5], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn lone_start_anchor_compiles_to_a_conditional_jump() {
+        // Same leaf shape as compile_empty/compile_literal: one instruction,
+        // one hole. The hole is what Machine::new fills with Match here,
+        // since the anchor is the whole (and only) fragment.
+        let ast = parse("^").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 2);
+        assert_eq!(
+            machine.program[0],
+            ValidInstruction::ConditionalJump(Position::Start, 1)
+        );
+        assert_eq!(machine.program[1], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn lone_end_anchor_compiles_to_a_conditional_jump() {
+        let ast = parse("$").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 2);
+        assert_eq!(
+            machine.program[0],
+            ValidInstruction::ConditionalJump(Position::End, 1)
+        );
+        assert_eq!(machine.program[1], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn anchor_before_a_literal_seams_like_any_other_concat() {
+        // "^a" -- Concat pushes zero states of its own; the whole product is
+        // the seam edge at the anchor's hole, same as simple_concat_regex.
+        let ast = parse("^a").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 4);
+        assert_eq!(
+            machine.program[0],
+            ValidInstruction::ConditionalJump(Position::Start, 1)
+        );
+        assert_eq!(machine.program[1], ValidInstruction::Jump(2));
+        assert_eq!(machine.program[2], ValidInstruction::Consume('a', 3));
+        assert_eq!(machine.program[3], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn anchor_after_a_literal_seams_like_any_other_concat() {
+        // "a$" -- mirror image of the above: the literal compiles first,
+        // the anchor second, same seam mechanics either way round.
+        let ast = parse("a$").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 4);
+        assert_eq!(machine.program[0], ValidInstruction::Consume('a', 1));
+        assert_eq!(machine.program[1], ValidInstruction::Jump(2));
+        assert_eq!(
+            machine.program[2],
+            ValidInstruction::ConditionalJump(Position::End, 3)
+        );
+        assert_eq!(machine.program[3], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn both_anchors_around_a_literal() {
+        /* "^a$" -- Concat is right-associative (concat_is_right_associative),
+        so the tree is Concat(Anchor(Start), Concat(Literal('a'), Anchor(End))).
+        Post-order, left to right, gives six slots:
+
+            0: ConditionalJump(Start, 1)
+            1: Jump(2)          <- seam: outer Concat's left hole
+            2: Consume('a', 3)
+            3: Jump(4)          <- seam: inner Concat's left hole
+            4: ConditionalJump(End, 5)
+            5: Match            <- root's hole, filled by Machine::new
+        */
+        let ast = parse("^a$").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 6);
+        assert_eq!(
+            machine.program[0],
+            ValidInstruction::ConditionalJump(Position::Start, 1)
+        );
+        assert_eq!(machine.program[1], ValidInstruction::Jump(2));
+        assert_eq!(machine.program[2], ValidInstruction::Consume('a', 3));
+        assert_eq!(machine.program[3], ValidInstruction::Jump(4));
+        assert_eq!(
+            machine.program[4],
+            ValidInstruction::ConditionalJump(Position::End, 5)
+        );
         assert_eq!(machine.program[5], ValidInstruction::Match);
     }
 }

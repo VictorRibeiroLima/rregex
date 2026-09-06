@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use crate::machine::{State, class::Class};
+use crate::machine::{Position, State, class::Class};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Instruction {
@@ -10,6 +10,7 @@ pub enum Instruction {
     ConsumeClass(Class),
     Jump(State),
     Split(State, State),
+    ConditionalJump(Position, State),
     Match,
 }
 
@@ -20,11 +21,13 @@ pub enum ValidInstruction {
     ConsumeClass(Class),
     Jump(State),
     Split(State, State),
+    ConditionalJump(Position, State),
     Match,
 }
 
 pub type Program = Vec<Instruction>;
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct ValidProgram {
     program: Vec<ValidInstruction>,
 }
@@ -41,6 +44,9 @@ impl ValidProgram {
                 Instruction::Split(s1, s2) => valid_program.push(ValidInstruction::Split(s1, s2)),
                 Instruction::ConsumeClass(class) => {
                     valid_program.push(ValidInstruction::ConsumeClass(class))
+                }
+                Instruction::ConditionalJump(anchor_kind, s) => {
+                    valid_program.push(ValidInstruction::ConditionalJump(anchor_kind, s))
                 }
                 Instruction::Match => valid_program.push(ValidInstruction::Match),
             }

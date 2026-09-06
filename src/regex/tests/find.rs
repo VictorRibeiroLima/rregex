@@ -264,6 +264,83 @@ fn negated_empty_class_matches_any_single_character() {
     assert_eq!(find("[^]", "!"), Some(1));
 }
 
+// --- anchors -----------------------------------------------------------
+
+#[test]
+fn dollar_requires_reaching_the_end_of_input() {
+    assert_eq!(find("ab$", "ab"), Some(2));
+    assert_eq!(find("ab$", "abc"), None); // one character left over, `$` fails
+}
+
+#[test]
+fn caret_requires_the_start_of_input() {
+    // `find` is already anchored at position 0 (see `find_reports_how_far_the_pattern_got`),
+    // so `^` is currently a no-op -- it can't add a constraint `find` doesn't
+    // already guarantee. It still has to not break anything.
+    assert_eq!(find("^ab", "ab"), Some(2));
+    assert_eq!(find("^ab", "xab"), None);
+}
+
+#[test]
+fn caret_and_dollar_together_anchor_the_whole_match() {
+    assert_eq!(find("^ab$", "ab"), Some(2));
+    assert_eq!(find("^ab$", "abx"), None); // trailing leftover
+    assert_eq!(find("^ab$", "xab"), None); // leading leftover
+}
+
+#[test]
+fn an_anchor_after_consumed_input_can_never_hold() {
+    // Position only ever increases. Once `a` is consumed, position is 1 and
+    // can never become 0 again, so `^` here can never be satisfied -- the
+    // pattern parses, but describes the empty language, same idea as `[]`
+    // reached by composition instead of by an explicit empty class.
+    assert_eq!(find("a^b", "ab"), None);
+    assert_eq!(find("a^b", "a^b"), None); // not even a literal '^' can satisfy it
+}
+
+#[test]
+fn an_anchor_before_remaining_input_can_never_hold() {
+    // Mirror image: once `$` holds, position is at the end, so there's
+    // nothing left for `b` to consume.
+    assert_eq!(find("a$b", "ab"), None);
+    assert_eq!(find("a$b", "a$b"), None);
+}
+
+#[test]
+fn dollar_is_scoped_to_the_branch_it_is_written_in() {
+    // `$` cannot reach across a `|` and constrain the other side -- same
+    // locality as any other atom inside an Alternation.
+    assert_eq!(find("foo$|bar", "foo"), Some(3)); // left branch, `$` holds
+    assert_eq!(find("foo$|bar", "bar"), Some(3)); // right branch, no `$` involved
+    assert_eq!(find("foo$|bar", "foobar"), None); // left branch's `$` fails; right needs "bar" at position 0
+    assert_eq!(find("foo$|bar", "foox"), None);
+}
+
+#[test]
+fn repeating_an_anchor_is_redundant_not_dead() {
+    // Zero-width means "test again right here," never "test somewhere else."
+    // `^^a` re-tests position 0 twice, still true both times.
+    assert_eq!(find("^^a", "a"), Some(1));
+}
+
+#[test]
+fn anchors_hold_on_the_empty_string() {
+    // The forcing case: `find`'s loop never calls `step` at all on "", so
+    // whatever tests `$`/`^` has to run in the very first closure call,
+    // before any character is read.
+    assert_eq!(find("$", ""), Some(0));
+    assert_eq!(find("^", ""), Some(0));
+    assert_eq!(find("^$", ""), Some(0));
+    assert_eq!(find("$", "a"), None); // contrast: one character means position 0 isn't the end
+}
+
+#[test]
+fn anchors_have_no_multiline_meaning() {
+    // '\n' is just another character in this alphabet -- it is not a line
+    // boundary. `$` only holds at the true end of the whole string.
+    assert_eq!(find("^a$", "a\nb"), None);
+}
+
 #[test]
 fn star_of_an_empty_class_still_matches_the_empty_string() {
     // `Star` always offers the zero-iterations path via its own Split, so

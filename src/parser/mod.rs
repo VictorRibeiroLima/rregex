@@ -1,6 +1,6 @@
 use crate::{
     cursor::Cursor,
-    parser::ast::{Ast, ClassSet, ClassType},
+    parser::ast::{AnchorKind, Ast, ClassSet, ClassType},
 };
 
 pub mod ast;
@@ -127,6 +127,14 @@ fn parse_atom(cursor: &mut Cursor) -> Result<Ast, ParserError> {
                 None => Err(ParserError::UnexpectedEndOfInput),
                 Some(c) => Ok(Ast::Literal(c)),
             }
+        }
+        Some('^') => {
+            cursor.next();
+            Ok(Ast::Anchor(AnchorKind::Start))
+        }
+        Some('$') => {
+            cursor.next();
+            Ok(Ast::Anchor(AnchorKind::End))
         }
         Some(c) => {
             cursor.next();

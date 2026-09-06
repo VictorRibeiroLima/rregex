@@ -13,7 +13,14 @@ pub enum Ast {
     Question(Box<Ast>),
     LazyQuestion(Box<Ast>),
     Class(ClassSet, bool), // bool indicates negation
+    Anchor(AnchorKind),
     Any,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum AnchorKind {
+    Start,
+    End,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

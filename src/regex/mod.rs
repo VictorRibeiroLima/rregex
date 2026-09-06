@@ -1,11 +1,12 @@
 use crate::{
-    machine::{Instruction, Machine, State},
+    machine::{Instruction, Machine, State, position::Position},
     parser::parse,
     regex::error::RegexError,
 };
 
 pub mod error;
 
+#[derive(Debug)]
 struct SeenSet {
     seen: Vec<bool>,
     traversed: Vec<State>,
@@ -51,6 +52,7 @@ impl Regex {
 
     pub fn find(&self, input: &str) -> Result<Option<usize>, RegexError> {
         let mut result = None;
+        let len = input.chars().count();
         let mut i = 0;
         let mut seen_set = SeenSet::new(self.len());
         //The buffer to move the memory in and out of places.
@@ -59,8 +61,9 @@ impl Regex {
         let mut buffer = SeenSet::new(self.len());
         seen_set.insert(self.machine.start());
         seen_set.traverse(self.machine.start());
-        let mut seen_set = self.closure(seen_set, &mut buffer);
+        let mut seen_set = self.closure(0, len, seen_set, &mut buffer);
         for c in input.chars() {
+            let position = i + 1; //Length based position
             let matched = self.step(&seen_set, &mut buffer, c);
             std::mem::swap(&mut seen_set, &mut buffer);
             if matched {
@@ -69,8 +72,8 @@ impl Regex {
             if seen_set.traversed.is_empty() {
                 break;
             }
-            seen_set = self.closure(seen_set, &mut buffer);
-            i += 1;
+            seen_set = self.closure(position, len, seen_set, &mut buffer);
+            i = position;
         }
         let matched = self.is_match(&seen_set);
         if matched {
@@ -127,17 +130,23 @@ impl Regex {
         return false;
     }
 
-    fn closure(&self, mut seen_set: SeenSet, buffer: &mut SeenSet) -> SeenSet {
+    fn closure(
+        &self,
+        position: usize,
+        len: usize,
+        mut seen_set: SeenSet,
+        buffer: &mut SeenSet,
+    ) -> SeenSet {
         buffer.clear();
         std::mem::swap(&mut buffer.traversed, &mut seen_set.traversed);
         let traversed = &buffer.traversed;
         for i in traversed {
-            self.follow(&mut seen_set, *i);
+            self.follow(&mut seen_set, *i, position, len);
         }
         seen_set
     }
 
-    fn follow(&self, seen_set: &mut SeenSet, i: usize) {
+    fn follow(&self, seen_set: &mut SeenSet, i: usize, position: usize, len: usize) {
         let program = self.machine.program();
         let inst = &program[i];
         match inst {
@@ -145,14 +154,31 @@ impl Regex {
                 if !seen_set.insert(*j) {
                     return;
                 }
-                self.follow(seen_set, *j);
+                self.follow(seen_set, *j, position, len);
             }
             Instruction::Split(j1, j2) => {
                 if seen_set.insert(*j1) {
-                    self.follow(seen_set, *j1);
+                    self.follow(seen_set, *j1, position, len);
                 }
                 if seen_set.insert(*j2) {
-                    self.follow(seen_set, *j2);
+                    self.follow(seen_set, *j2, position, len);
+                }
+            }
+            Instruction::ConditionalJump(p, j) => {
+                match p {
+                    Position::Start => {
+                        if position != 0 {
+                            return;
+                        }
+                    }
+                    Position::End => {
+                        if position != len {
+                            return;
+                        }
+                    }
+                };
+                if seen_set.insert(*j) {
+                    self.follow(seen_set, *j, position, len);
                 }
             }
             Instruction::Consume(_, _)
@@ -167,7 +193,8 @@ impl Regex {
     fn is_match(&self, seen_set: &SeenSet) -> bool {
         let program = self.machine.program();
         for i in &seen_set.traversed {
-            if let Instruction::Match = program[*i] {
+            let inst = &program[*i];
+            if let Instruction::Match = inst {
                 return true;
             }
         }
