@@ -3,7 +3,10 @@ use crate::{
         class::{Class, ClassInstruction},
         position::Position,
     },
-    parser::ast::{Ast, ClassType},
+    parser::{
+        ast::{AnchorKind, Ast, ClassType},
+        bounded_repetition::BoundedRepetition,
+    },
 };
 use program::{Instruction as Inst, Program, ValidInstruction, ValidProgram};
 
@@ -15,6 +18,7 @@ pub mod position;
 pub type State = usize;
 pub type Instruction = ValidInstruction;
 
+#[derive(Debug, Clone, Copy)]
 struct Fragment {
     start: State,
     exit: State,
@@ -61,12 +65,66 @@ fn compile_fragment(ast: &Ast, program: &mut Program) -> Fragment {
         Ast::LazyQuestion(ast) => compile_lazy_question(ast, program),
         Ast::Class(c, negated) => compile_class(c, *negated, program),
         Ast::Anchor(anchor_kind) => compile_anchor(anchor_kind, program),
-        Ast::BoundedRepetition(_) => todo!(""),
+        Ast::BoundedRepetition(bd) => compile_bounded_repetition(bd, program),
         Ast::Any => compile_any(program),
     }
 }
 
-fn compile_anchor(anchor_kind: &crate::parser::ast::AnchorKind, program: &mut Program) -> Fragment {
+fn compile_bounded_repetition(bd: &BoundedRepetition, program: &mut Program) -> Fragment {
+    let n = bd.n;
+    let lazy = bd.lazy;
+    let start = program.len();
+    program.push(Inst::Hole);
+    let mut last_frag = Fragment { start, exit: start };
+
+    //Required repetitions
+    for _ in 0..n {
+        let frag = compile_fragment(&bd.ast, program);
+        program[last_frag.exit] = Inst::Jump(frag.start);
+        last_frag = frag;
+    }
+
+    //optional repetitions
+    let m = match bd.m {
+        None => {
+            let exit = program.len();
+            program.push(Inst::Hole);
+            if n == 0 {
+                let frag = compile_fragment(&bd.ast, program);
+                program[frag.exit] = Inst::Jump(start);
+                program[last_frag.exit] = Inst::Split(frag.start, exit);
+                if lazy {
+                    program[last_frag.exit] = Inst::Split(exit, frag.start);
+                }
+                return Fragment { start, exit };
+            }
+
+            program[last_frag.exit] = Inst::Split(last_frag.start, exit);
+            if lazy {
+                program[last_frag.exit] = Inst::Split(exit, last_frag.start);
+            }
+
+            return Fragment { start, exit };
+        }
+        Some(m) => m,
+    };
+    for _ in n..m {
+        let frag = compile_fragment(&bd.ast, program);
+        program[last_frag.exit] = Inst::Split(frag.start, frag.exit);
+        if lazy {
+            program[last_frag.exit] = Inst::Split(frag.exit, frag.start);
+        }
+
+        last_frag = frag;
+    }
+
+    return Fragment {
+        start: start,
+        exit: last_frag.exit,
+    };
+}
+
+fn compile_anchor(anchor_kind: &AnchorKind, program: &mut Program) -> Fragment {
     let start = program.len();
     let exit = start + 1;
     let position = Position::from(anchor_kind);
@@ -838,5 +896,167 @@ mod test {
             ValidInstruction::ConditionalJump(Position::End, 5)
         );
         assert_eq!(machine.program[5], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn exact_repetition_compiles_to_n_mandatory_copies_chained_by_jump() {
+        // "a{2}" -- BoundedRepetition { n: 2, m: Some(2) }. Every mandatory
+        // copy is chained the same way Concat chains any two fragments: the
+        // previous copy's hole becomes a plain Jump into the next copy's own
+        // start. The leading hole (slot 0) exists purely to give the very
+        // first copy something to be jumped into from a uniform entry point
+        // -- it stays live and reachable here, never orphaned.
+        let ast = parse("a{2}").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 5);
+        assert_eq!(machine.program[0], ValidInstruction::Jump(1));
+        assert_eq!(machine.program[1], ValidInstruction::Consume('a', 2));
+        assert_eq!(machine.program[2], ValidInstruction::Jump(3));
+        assert_eq!(machine.program[3], ValidInstruction::Consume('a', 4));
+        assert_eq!(machine.program[4], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn bounded_repetition_adds_optional_copies_after_the_mandatory_ones() {
+        // "a{2,3}" -- 2 mandatory copies (plain Jump seams), then one
+        // optional copy whose entry Split is authored by the gadget itself
+        // and written directly into the second copy's own exit hole -- no
+        // extra state spent on the decision.
+        let ast = parse("a{2,3}").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 7);
+        assert_eq!(machine.program[0], ValidInstruction::Jump(1));
+        assert_eq!(machine.program[1], ValidInstruction::Consume('a', 2));
+        assert_eq!(machine.program[2], ValidInstruction::Jump(3));
+        assert_eq!(machine.program[3], ValidInstruction::Consume('a', 4));
+        assert_eq!(machine.program[4], ValidInstruction::Split(5, 6));
+        assert_eq!(machine.program[5], ValidInstruction::Consume('a', 6));
+        assert_eq!(machine.program[6], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn zero_minimum_turns_the_leading_hole_into_the_first_decision_split() {
+        // "a{0,3}" -- n == 0, so there is no mandatory copy to anchor the
+        // first decision to. The leading hole (slot 0) becomes the entry
+        // Split itself instead of a Jump, unrolling into exactly "a?a?a?".
+        let ast = parse("a{0,3}").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 7);
+        assert_eq!(machine.program[0], ValidInstruction::Split(1, 2));
+        assert_eq!(machine.program[1], ValidInstruction::Consume('a', 2));
+        assert_eq!(machine.program[2], ValidInstruction::Split(3, 4));
+        assert_eq!(machine.program[3], ValidInstruction::Consume('a', 4));
+        assert_eq!(machine.program[4], ValidInstruction::Split(5, 6));
+        assert_eq!(machine.program[5], ValidInstruction::Consume('a', 6));
+        assert_eq!(machine.program[6], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn zero_total_repetitions_compiles_to_the_same_shape_as_empty() {
+        // "a{0,0}" -- both loops run zero times, so the leading hole is
+        // never touched by anything but Machine::new. start == exit == 0,
+        // exactly empty_regex's shape: one lone hole that becomes Match.
+        let ast = parse("a{0,0}").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 1);
+        assert_eq!(machine.program[0], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn unbounded_repetition_loops_on_the_last_mandatory_copy() {
+        // "a{2,}" -- 2 mandatory copies, then the *second* copy is given
+        // compile_plus's own treatment: no third copy is ever compiled, its
+        // own start (slot 3) becomes the loop-back target.
+        let ast = parse("a{2,}").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 6);
+        assert_eq!(machine.program[0], ValidInstruction::Jump(1));
+        assert_eq!(machine.program[1], ValidInstruction::Consume('a', 2));
+        assert_eq!(machine.program[2], ValidInstruction::Jump(3));
+        assert_eq!(machine.program[3], ValidInstruction::Consume('a', 4));
+        assert_eq!(machine.program[4], ValidInstruction::Split(3, 5));
+        assert_eq!(machine.program[5], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn unbounded_repetition_with_zero_minimum_needs_a_skippable_entry() {
+        // "a{0,}" -- equivalent to "a*", and must compile the same way: a
+        // real Split at the entry (slot 0), not a Jump, since there is no
+        // mandatory copy that could force at least one repetition.
+        let ast = parse("a{0,}").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 4);
+        assert_eq!(machine.program[0], ValidInstruction::Split(2, 1));
+        assert_eq!(machine.program[1], ValidInstruction::Match);
+        assert_eq!(machine.program[2], ValidInstruction::Consume('a', 3));
+        assert_eq!(machine.program[3], ValidInstruction::Jump(0));
+    }
+
+    #[test]
+    fn lazy_unbounded_repetition_swaps_the_trailing_splits_targets() {
+        // "a{2,}?" -- identical to unbounded_repetition_loops_on_the_last_
+        // mandatory_copy except the trailing Split's two targets are
+        // swapped, same as every other lazy variant in this file.
+        let ast = parse("a{2,}?").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 6);
+        assert_eq!(machine.program[0], ValidInstruction::Jump(1));
+        assert_eq!(machine.program[1], ValidInstruction::Consume('a', 2));
+        assert_eq!(machine.program[2], ValidInstruction::Jump(3));
+        assert_eq!(machine.program[3], ValidInstruction::Consume('a', 4));
+        assert_eq!(machine.program[4], ValidInstruction::Split(5, 3));
+        assert_eq!(machine.program[5], ValidInstruction::Match);
+    }
+
+    #[test]
+    fn bounded_repetition_of_an_alternation() {
+        /* "(a|b){2,3}" -- proves compile_bounded_repetition only ever touches
+        a copy's start/exit as two integers, same proof as plus_of_an_
+        alternation, just repeated across three copies instead of one.
+
+        leading hole      0: Hole (becomes Jump into copy 1)
+        copy 1 ('a|b')    1: Consume('a',2)  2: Jump(6)
+                          3: Consume('b',4)  4: Jump(6)
+                          5: Split(1,3)      6: Hole      frag = (5, 6)
+        seam              0 -> Jump(5)
+        copy 2 ('a|b')    7: Consume('a',8)   8: Jump(12)
+                          9: Consume('b',10)  10: Jump(12)
+                          11: Split(7,9)      12: Hole    frag = (11, 12)
+        seam              6 -> Jump(11)
+        copy 3 ('a|b')    13: Consume('a',14) 14: Jump(18)
+                          15: Consume('b',16) 16: Jump(18)
+                          17: Split(13,15)    18: Hole    frag = (17, 18)
+        decision split     12 -> Split(17, 18)
+        top level          18: Match                                       */
+        let ast = parse("(a|b){2,3}").unwrap();
+        let machine = Machine::new(ast);
+        assert_eq!(machine.start, 0);
+        assert_eq!(machine.program.len(), 19);
+        assert_eq!(machine.program[0], ValidInstruction::Jump(5));
+        assert_eq!(machine.program[1], ValidInstruction::Consume('a', 2));
+        assert_eq!(machine.program[2], ValidInstruction::Jump(6));
+        assert_eq!(machine.program[3], ValidInstruction::Consume('b', 4));
+        assert_eq!(machine.program[4], ValidInstruction::Jump(6));
+        assert_eq!(machine.program[5], ValidInstruction::Split(1, 3));
+        assert_eq!(machine.program[6], ValidInstruction::Jump(11));
+        assert_eq!(machine.program[7], ValidInstruction::Consume('a', 8));
+        assert_eq!(machine.program[8], ValidInstruction::Jump(12));
+        assert_eq!(machine.program[9], ValidInstruction::Consume('b', 10));
+        assert_eq!(machine.program[10], ValidInstruction::Jump(12));
+        assert_eq!(machine.program[11], ValidInstruction::Split(7, 9));
+        assert_eq!(machine.program[12], ValidInstruction::Split(17, 18));
+        assert_eq!(machine.program[13], ValidInstruction::Consume('a', 14));
+        assert_eq!(machine.program[14], ValidInstruction::Jump(18));
+        assert_eq!(machine.program[15], ValidInstruction::Consume('b', 16));
+        assert_eq!(machine.program[16], ValidInstruction::Jump(18));
+        assert_eq!(machine.program[17], ValidInstruction::Split(13, 15));
+        assert_eq!(machine.program[18], ValidInstruction::Match);
     }
 }

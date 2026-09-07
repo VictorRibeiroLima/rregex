@@ -351,3 +351,61 @@ fn star_of_an_empty_class_still_matches_the_empty_string() {
     assert_eq!(find("[]*", ""), Some(0));
     assert_eq!(find("[]*", "a"), Some(0));
 }
+
+#[test]
+fn bounded_repetition_matches_exactly_n_times() {
+    assert_eq!(find("(a|b){2}", "ab"), Some(2));
+    assert_eq!(find("(a|b){2}", "aa"), Some(2));
+    assert_eq!(find("(a|b){2}", "ba"), Some(2));
+    assert_eq!(find("(a|b){2}", "bb"), Some(2));
+    assert_eq!(find("(a|b){2}", "a"), None);
+    assert_eq!(find("(a|b){2}", "aaa"), Some(2)); // leftover 'a' is fine, find isn't anchored at the end
+}
+
+#[test]
+fn bounded_repetition_matches_exactly_n_times_lazy() {
+    assert_eq!(find("(a|b){2}?", "ab"), Some(2));
+    assert_eq!(find("(a|b){2}?", "aa"), Some(2));
+    assert_eq!(find("(a|b){2}?", "ba"), Some(2));
+    assert_eq!(find("(a|b){2}?", "bb"), Some(2));
+    assert_eq!(find("(a|b){2}?", "a"), None);
+    assert_eq!(find("(a|b){2}?", "aaa"), Some(2)); // leftover 'a' is fine, find isn't anchored at the end
+}
+
+#[test]
+fn bounded_repetition_matches_up_to_n_times() {
+    assert_eq!(find("(a|b){0,3}", ""), Some(0));
+    assert_eq!(find("(a|b){,3}", ""), Some(0));
+    assert_eq!(find("(a|b){,3}", "aba"), Some(3));
+    assert_eq!(find("(a|b){0,3}", "c"), Some(0));
+    assert_eq!(find("(a|b){0,3}", "a"), Some(1));
+    assert_eq!(find("a{0,0}", "c"), Some(0));
+    assert_eq!(find("(a|b){0,3}", "ab"), Some(2));
+    assert_eq!(find("(a|b){0,3}", "aba"), Some(3));
+    assert_eq!(find("(a|b){0,3}", "abab"), Some(3)); // leftover 'ab' is fine, find isn't anchored at the end
+    assert_eq!(find("(a|b){0,3}", "ababab"), Some(3)); // leftover 'abab' is fine, find isn't anchored at the end
+}
+
+#[test]
+fn bounded_repetition_matches_up_to_n_times_lazy() {
+    assert_eq!(find("(a|b){1,3}?", "a"), Some(1));
+    assert_eq!(find("(a|b){1,3}?", "c"), None);
+    assert_eq!(find("(a|b){1,3}?", "ab"), Some(1));
+    assert_eq!(find("(a|b){1,3}?", "aba"), Some(1));
+    assert_eq!(find("(a|b){1,3}?", "abab"), Some(1)); // leftover 'ab' is fine, find isn't anchored at the end
+}
+
+#[test]
+fn bounded_repetition_unbounded() {
+    assert_eq!(find("a{0,}", "aaa"), Some(3));
+    assert_eq!(find("a{0,}?", "aaa"), Some(0));
+    assert_eq!(find("a{0,}", ""), Some(0));
+    assert_eq!(find("a{1,}", "aaa"), Some(3));
+    assert_eq!(find("a{1,}?", "aaa"), Some(1));
+}
+
+#[test]
+fn bounded_repetition_fake() {
+    assert_eq!(find("a{2,3a}", "aaa"), None);
+    assert_eq!(find("a{2,3a}", "a{2,3a}"), Some(7));
+}
