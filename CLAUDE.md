@@ -670,6 +670,29 @@ runs drop glue, but keeps the allocation.)
   entirely and their cost shows up under `RawVec`/`malloc`, while the parser's
   recursive functions survive as named frames because recursion blocks inlining.
 
+### Lesson 6 — `\d`/`\w`/`\s` shorthand, `\n`/`\t` escapes (next)
+
+Pure sugar, no new AST variants: new arms in the existing `\` branch of
+`parse_atom`. `\d`/`\w`/`\s` (and their negated uppercase forms) desugar to
+`Ast::Class`; `\n`/`\t` desugar to `Ast::Literal` holding the real control
+character. Nothing in `machine/` or `regex/` needs to change.
+
+### Lesson 7 — search, spans, captures (next)
+
+One subject, not three: unanchored search, `(start, end)` spans, and capture
+groups all need threads to carry a start offset, not just an end one.
+
+- Unanchored search: `find` only answers "does the whole string match starting
+  at 0." A restart loop over offsets is `O(n²·m)` and needs the empty-match
+  guard (`if end == start`, advance one) and a non-overlapping convention.
+  Recovering linear time means an implicit low-priority `.*?` prefix on the
+  pattern instead.
+- That `.*?` prefix needs each thread to know *where it started* — a per-thread
+  start offset, not one global one. Spans are the same requirement read
+  differently: `(start, end)` instead of just `end`.
+- Capture groups generalize the same idea: each thread carries a small array of
+  offsets, one pair per group, instead of a single number.
+
 ## Open items
 
 Not bugs to fix unprompted — raise them when relevant.
@@ -684,12 +707,6 @@ only sound if the search were leftmost-**longest**. The fix is to ask the Lesson
 3 question instead — consume the whole input with no early record and no cut,
 then test whether `Match` is in the final closed set. Victor left this unfixed
 to think about; **do not fix it unprompted.**
-
-**Unimplemented notation.** `\d`/`\w`/`\s` shorthand and `\n`/`\t` translation.
-
-**Search, spans, captures.** One subject, not three. Unanchored search,
-`(start, end)` spans, and capture groups all need threads to carry a start
-offset. `find` is O(n·m); a naive restart loop for search is O(n²·m).
 
 **Performance, all deferred until a benchmark complains.**
 
