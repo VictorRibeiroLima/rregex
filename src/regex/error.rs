@@ -18,6 +18,13 @@ impl From<ParserError> for RegexError {
                 "Invalid range '{}' - '{}' in regex pattern",
                 c1, c2
             )),
+            ParserError::LimitExceeded(n1) => {
+                RegexError::ParseError(format!("{} Quantifier exceeds the supported limit", n1,))
+            }
+            ParserError::MinimumGreaterThanMaximum(n1, n2) => RegexError::ParseError(format!(
+                "Invalid quantifier range: minimum {} is greater than maximum {}",
+                n1, n2
+            )),
         }
     }
 }

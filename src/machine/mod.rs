@@ -61,6 +61,7 @@ fn compile_fragment(ast: &Ast, program: &mut Program) -> Fragment {
         Ast::LazyQuestion(ast) => compile_lazy_question(ast, program),
         Ast::Class(c, negated) => compile_class(c, *negated, program),
         Ast::Anchor(anchor_kind) => compile_anchor(anchor_kind, program),
+        Ast::BoundedRepetition(_) => todo!(""),
         Ast::Any => compile_any(program),
     }
 }

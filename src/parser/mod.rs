@@ -1,14 +1,20 @@
 use crate::{
-    cursor::Cursor,
-    parser::ast::{AnchorKind, Ast, ClassSet, ClassType},
+    cursor::{Cursor, OverFlowResult},
+    parser::{
+        ast::{AnchorKind, Ast, ClassSet, ClassType},
+        bounded_repetition::BoundedRepetition,
+    },
 };
 
 pub mod ast;
+pub mod bounded_repetition;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParserError {
     UnexpectedToken(char),
     InvalidRange(char, char),
+    LimitExceeded(String),
+    MinimumGreaterThanMaximum(u16, u16),
     UnexpectedEndOfInput,
 }
 
@@ -84,10 +90,179 @@ fn parse_repetition(cursor: &mut Cursor) -> Result<Ast, ParserError> {
                 }
                 node = Ast::Question(Box::new(node));
             }
+            '{' => {
+                let initial_offset: usize = cursor.offset();
+                node = parse_bonded_repetition(cursor, node)?;
+                if cursor.offset() == initial_offset {
+                    //we didn't consume any tokens, so we should break to avoid an infinite loop
+                    break;
+                }
+            }
             _ => break,
         }
     }
     Ok(node)
+}
+
+fn parse_bonded_repetition(cursor: &mut Cursor, node: Ast) -> Result<Ast, ParserError> {
+    //We are inside a peek so we need to keep track of our offset
+    let mut offset = 1;
+    offset = cursor.offset_whitespace_at(offset);
+    let n1 = match cursor.peek_at(offset) {
+        None => return Ok(node),
+        Some(c) => c,
+    };
+    if n1 == ',' {
+        return parse_bonded_repetition_comma_start(cursor, node, offset);
+    }
+    let n1 = match cursor.peek_number_at(offset) {
+        None => return Ok(node),
+        Some(r) => r,
+    };
+    offset = n1.offset;
+    offset = cursor.offset_whitespace_at(offset);
+    let n2 = match cursor.peek_at(offset) {
+        None => return Ok(node),
+        Some(c) => c,
+    };
+    if n2 != ',' && n2 != '}' {
+        return Ok(node);
+    }
+    offset += 1;
+    if n2 == '}' {
+        return parse_bonded_repetition_exact(cursor, node, n1, offset);
+    }
+    offset = cursor.offset_whitespace_at(offset);
+    if cursor.peek_at(offset) == Some('}') {
+        offset += 1;
+        return parse_bonded_repetition_unbounded(cursor, node, n1, offset);
+    }
+    let n3 = match cursor.peek_number_at(offset) {
+        None => return Ok(node),
+        Some(r) => r,
+    };
+    offset = n3.offset;
+    offset = cursor.offset_whitespace_at(offset);
+    let n4 = match cursor.peek_at(offset) {
+        Some(c) => c,
+        None => return Ok(node),
+    };
+    if n4 != '}' {
+        return Ok(node);
+    }
+    offset += 1;
+    let (n, m) = match (n1.result, n3.result) {
+        (Err(_), _) | (_, Err(_)) => {
+            let string = cursor.string_offset(offset);
+            return Err(ParserError::LimitExceeded(string));
+        }
+        (Ok(n), Ok(m)) => (n, m),
+    };
+    if n > m {
+        return Err(ParserError::MinimumGreaterThanMaximum(n, m));
+    }
+    let lazy = check_lazy(cursor, &mut offset);
+    cursor.move_to(offset);
+    let bonded_repetition = BoundedRepetition {
+        ast: Box::new(node),
+        lazy,
+        n,
+        m: Some(m),
+    };
+    return Ok(Ast::BoundedRepetition(bonded_repetition));
+}
+
+fn parse_bonded_repetition_comma_start(
+    cursor: &mut Cursor,
+    node: Ast,
+    mut offset: usize,
+) -> Result<Ast, ParserError> {
+    offset += 1;
+    offset = cursor.offset_whitespace_at(offset);
+    let n2 = match cursor.peek_number_at(offset) {
+        None => return Ok(node),
+        Some(r) => r,
+    };
+
+    let num = match n2.result {
+        Err(_) => {
+            offset = n2.offset;
+            offset = cursor.offset_whitespace_at(offset);
+            if cursor.peek_at(offset) == Some('}') {
+                offset += 1;
+                let string = cursor.string_offset(offset);
+                return Err(ParserError::LimitExceeded(string));
+            }
+            return Ok(node);
+        }
+        Ok(r) => r,
+    };
+
+    offset = n2.offset;
+    offset = cursor.offset_whitespace_at(offset);
+    if cursor.peek_at(offset) != Some('}') {
+        return Ok(node);
+    }
+    offset += 1;
+    let lazy = check_lazy(cursor, &mut offset);
+    cursor.move_to(offset);
+    let bonded_repetition = BoundedRepetition {
+        ast: Box::new(node),
+        lazy,
+        n: 0,
+        m: Some(num),
+    };
+    return Ok(Ast::BoundedRepetition(bonded_repetition));
+}
+
+fn parse_bonded_repetition_exact(
+    cursor: &mut Cursor,
+    node: Ast,
+    result: OverFlowResult,
+    mut offset: usize,
+) -> Result<Ast, ParserError> {
+    let num = match result.result {
+        Err(_) => {
+            let string = cursor.string_offset(offset);
+            return Err(ParserError::LimitExceeded(string));
+        }
+        Ok(r) => r,
+    };
+
+    let lazy = check_lazy(cursor, &mut offset);
+    cursor.move_to(offset);
+    let bonded_repetition = BoundedRepetition {
+        ast: Box::new(node),
+        lazy,
+        n: num,
+        m: Some(num),
+    };
+    return Ok(Ast::BoundedRepetition(bonded_repetition));
+}
+
+fn parse_bonded_repetition_unbounded(
+    cursor: &mut Cursor,
+    node: Ast,
+    result: OverFlowResult,
+    mut offset: usize,
+) -> Result<Ast, ParserError> {
+    let num = match result.result {
+        Err(_) => {
+            let string = cursor.string_offset(offset);
+            return Err(ParserError::LimitExceeded(string));
+        }
+        Ok(r) => r,
+    };
+
+    let lazy = check_lazy(cursor, &mut offset);
+    cursor.move_to(offset);
+    let bonded_repetition = BoundedRepetition {
+        ast: Box::new(node),
+        lazy,
+        n: num,
+        m: None,
+    };
+    return Ok(Ast::BoundedRepetition(bonded_repetition));
 }
 
 fn parse_atom(cursor: &mut Cursor) -> Result<Ast, ParserError> {
@@ -195,5 +370,12 @@ fn parse_class(cursor: &mut Cursor) -> Result<Ast, ParserError> {
     }
 }
 
+fn check_lazy(cursor: &Cursor, offset: &mut usize) -> bool {
+    if cursor.peek_at(*offset) == Some('?') {
+        *offset += 1;
+        return true;
+    }
+    return false;
+}
 #[cfg(test)]
 mod tests;

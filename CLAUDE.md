@@ -56,6 +56,7 @@ Don't relitigate these without being asked.
 | Buffers | **Two long-lived `SeenSet`s, swapped** | `find` allocates exactly twice regardless of input length. Never `mem::take` a buffer field — it leaves a zero-capacity `Vec` behind. |
 | Match semantics | **Leftmost-first**, not POSIX leftmost-longest | It is what every mainstream engine does and what intuition expects. `Split(body, exit)` order is greediness; the swap is `*?`. |
 | Class negation | **One `bool` on the whole class**, never per-item | De Morgan's: the complement of a union is the intersection of complements. Invert once, at the end. |
+| Possessive quantifiers / atomic groups | **Not implemented, and can't be** | They require discarding a live thread because of an earlier commitment, so a thread's fate would depend on more than `(state, position)` — the same invariant that forbids backreferences. Consequence: `+` after a quantifier is never a possessive suffix here, just ordinary stacking (`a{3,4}++` is `Plus(Plus(…))`), a deliberate divergence from PCRE. |
 
 ## Progress
 
@@ -675,22 +676,75 @@ runs drop glue, but keeps the allocation.)
   entirely and their cost shows up under `RawVec`/`malloc`, while the parser's
   recursive functions survive as named frames because recursion blocks inlining.
 
-### Lesson 5.b — anchors, bounded repetition, the empty class (next)
+### Lesson 5.b — the empty class, anchors, `{n,m}` parsing (complete)
 
-1. **Resolve `[]` first.** Decide `class_item+` vs `class_item*` deliberately
-   and update `parse_class`. If empty classes stay legal, `[^]` ("not in the
-   empty set" — every character, the same language as `.` by a completely
-   different route) is the interesting edge.
-2. **`$`/`^` anchors.** A structurally new instruction category: zero-width like
-   `Jump`/`Split`, but it must test *position* (start/end of input) and **die**
-   like a failed `Consume` when the assertion doesn't hold. Genuinely new theory
-   for the sequence, not more plumbing. `^` is already overloaded (class
-   negation vs. anchor) — expect that collision to need explicit handling in
-   `parse_atom`, the same way `?` did for lazy quantifiers.
-3. **`{n,m}`** (and `{n}`, `{n,}`, `{,m}`) — no design work yet. Generalizes
-   `*`/`+`/`?` (`{0,}=*`, `{1,}=+`, `{0,1}=?`), so the compile shape is probably
-   another member of the gadget family, but the *parsing* is new: it must read
-   and validate a bounded integer count, not a single character.
+**The empty class is legal by decision now, not by accident.** No code changed:
+`Class`'s union-scan-then-negate-once already gives the right answer for zero
+items, so `[]` is ∅ (a `Consume`-shaped atom nothing survives) and `[^]` is every
+character — `.`'s language by a different route. `[]*` still matches `""`, which
+is `∅* = ε` falling out of `Star`'s gadget with nothing reified.
+
+**Anchors** — [src/machine/position.rs](src/machine/position.rs),
+`Instruction::ConditionalJump(Position, State)`, plus a position parameter
+threaded through `closure`/`follow`. Reference: [anchors.md](anchors.md).
+
+- **A third instruction category.** Lesson 2's partition was "`Consume` advances
+  the input position; `Jump`/`Split`/`Match` don't." An anchor is zero-width
+  *and* able to fail — on a fact about position, not about a character. That
+  combination had no slot.
+- **Closure owns the test, not `step`.** The forcing case is `find("$", "")`:
+  `find`'s loop is `for c in input.chars()`, so on empty input `step` is never
+  called at all — only the initial `closure` runs, so only `closure` can test an
+  assertion that must hold there. This is the first time ε-travel needed to know
+  *where* it is.
+- **An anchor is a `Jump` with a test.** It groups with `Jump`/`Split` in
+  `follow` and is never a wall — it never enters `traversed` itself (`step` has
+  no test that could mean anything for it) and conditionally recurses into its
+  target. Rejection is silent: no insert, no recurse, nothing signalled upward,
+  exactly like `step`'s failed `ConsumeClass`. Victor reached this himself from
+  his own hand-drawn `(3) --isEnd--> (4)` edge.
+- **∅ by composition, for free.** Position only increases, so `a^b` and `a$b`
+  parse fine and match nothing; `^^a` is redundant, not dead. Whole-string only
+  — no multi-line mode.
+- `^` is vacuous today (`find` is already anchored at 0) and only becomes
+  meaningful when unanchored search lands. `$` constrains something `find` does
+  not already guarantee, which is why it was worth building now.
+
+**`{n,m}` parsing** — [src/parser/bounded_repetition.rs](src/parser/bounded_repetition.rs),
+`parse_bounded_repetition` and friends, `Cursor::peek_number_at`. Reference:
+[bounded-repetition.md](bounded-repetition.md).
+
+- **The new parsing shape: attempt, then commit.** Every prior ambiguity was
+  settled by one character of lookahead or by which grammar was active. `{` is
+  only a quantifier if a whole sub-grammar (digits, optional comma, digits, `}`)
+  validates; malformed means the `{` is an ordinary literal, PCRE-style. Solved
+  without a rewind mechanism: nothing touches the cursor until the final
+  `cursor.move_to(offset)` on a committed path, so every bail-out is a plain
+  `Ok(node)` with the cursor untouched and `parse_atom`'s literal catch-all
+  picks `{` up for free.
+- Overflow is checked *after* the shape is confirmed, so `a{99999999x}` falls
+  back to literal rather than erroring about a limit on something that was never
+  a quantifier. `u16` was chosen because PCRE's real ceiling is 65535 — the type
+  itself is the check. It does **not** bound the nested product (`(a{500}){500}`).
+- Whitespace inside `{ 2 , 3 }` is accepted, deliberately, verified against
+  regex101.
+
+### Lesson 5.c — compiling `{n,m}` (next)
+
+`Ast::BoundedRepetition` is `todo!()` in `compile_fragment`. The theory is
+already worked out in [bounded-repetition.md](bounded-repetition.md):
+
+- **This is the first gadget that compiles its child more than once.** An NFA
+  state is just an index; nothing rides along counting iterations, so bounded
+  counting needs ~`m` distinct states — you cannot express it as one cycle the
+  way `Star` does. Unroll: `n` mandatory copies, then `m - n` optional ones
+  (`{n,}` is `n` copies plus a trailing `+` on the last, which is what Victor
+  drew unprompted and is the right shape).
+- Repeating a *complex* child is no harder than a literal: `compile_fragment`
+  already takes `&Ast`, so calling it N times needs no `Ast: Clone` and the
+  gadget stays as blind to the child's shape as `compile_plus` already is.
+- Open: whether to cap the nested product before it compiles to an enormous
+  program.
 
 ## Open items
 
@@ -707,9 +761,8 @@ only sound if the search were leftmost-**longest**. The fix is to ask the Lesson
 then test whether `Match` is in the final closed set. Victor left this unfixed
 to think about; **do not fix it unprompted.**
 
-**Unimplemented notation.** Anchors (`^`, `$`) and `{n,m}` — see Lesson 5.b.
-`\d`/`\w`/`\s` shorthand and `\n`/`\t` translation. The empty class `[]` is
-currently legal by accident, not decision.
+**Unimplemented notation.** `\d`/`\w`/`\s` shorthand and `\n`/`\t` translation.
+`{n,m}` parses but does not compile — see Lesson 5.c.
 
 **Search, spans, captures.** One subject, not three. Unanchored search,
 `(start, end)` spans, and capture groups all need threads to carry a start

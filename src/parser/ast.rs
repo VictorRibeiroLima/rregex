@@ -1,5 +1,7 @@
 use std::ops::{Deref, DerefMut};
 
+use crate::parser::bounded_repetition::BoundedRepetition;
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum Ast {
     Empty,
@@ -14,6 +16,7 @@ pub enum Ast {
     LazyQuestion(Box<Ast>),
     Class(ClassSet, bool), // bool indicates negation
     Anchor(AnchorKind),
+    BoundedRepetition(BoundedRepetition),
     Any,
 }
 
