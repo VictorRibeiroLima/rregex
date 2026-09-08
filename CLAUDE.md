@@ -670,12 +670,48 @@ runs drop glue, but keeps the allocation.)
   entirely and their cost shows up under `RawVec`/`malloc`, while the parser's
   recursive functions survive as named frames because recursion blocks inlining.
 
-### Lesson 6 — `\d`/`\w`/`\s` shorthand, `\n`/`\t` escapes (next)
+### Lesson 6 — class escapes, then `\d`/`\w`/`\s` and `\n`/`\t` (next)
 
-Pure sugar, no new AST variants: new arms in the existing `\` branch of
-`parse_atom`. `\d`/`\w`/`\s` (and their negated uppercase forms) desugar to
-`Ast::Class`; `\n`/`\t` desugar to `Ast::Literal` holding the real control
-character. Nothing in `machine/` or `regex/` needs to change.
+**Opens with a bug fix, not a feature.** `parse_class` has no `\` handling at
+all — it never calls into `parse_atom`'s escape branch, so every char inside
+`[...]` is read as itself, backslash included. Fixing it is a prerequisite for
+the shorthand work below, not optional cleanup. Four red tests pin it (grep
+`class escapes` in [src/parser/tests.rs](src/parser/tests.rs)), three failure
+shapes:
+
+- **silently wrong tree** — `[\]]` → `Concat(Class({\\}), Literal(']'))`, and
+  `[\-]`/`[\^]` gain a spurious `Single('\\')`.
+- **wrongly rejects** — `[a-\]]` → `InvalidRange('a', '\\')`, the backslash
+  eaten as the range endpoint. Hence: an escape must resolve to its char
+  *before* range detection runs.
+- **wrongly accepts** — `[abc\]` is an unterminated class but parses as
+  `{a,b,c,\\}`.
+
+`[\\]` is the trap — already correct, but only because both raw backslashes
+push the same `Single` and `ClassSet::push` dedups. It passes either side of
+the fix, so it is no regression signal.
+
+Audited: `parse_class` is the **only** place with this gap. Every other
+raw-char inspection (`parse_concat`'s stop set, `parse_repetition`'s
+quantifier peek, `check_lazy`, `eat('|')`, `{n,m}`'s lookahead) runs *between*
+atoms, by which point `parse_atom`'s `\` branch has consumed both chars of the
+escape — so `a\|b`, `a\{2}`, `a{2}\?`, `a\*?` and `(a\))` are already right.
+`parse_class` is the one sub-grammar reading raw chars *inside* an atom.
+
+**Then the shorthand, which rides on the same new branch.** No new AST
+variants: `\d`/`\w`/`\s` (and negated uppercase forms) desugar to `Ast::Class`,
+`\n`/`\t` to `Ast::Literal`. `machine/` and `regex/` stay untouched — the
+expansion bottoms out in `ClassType::Range`/`Single` entries in the same
+`ClassSet`, exactly what those layers already consume.
+
+Two behaviors that branch must keep apart: escaping a class metacharacter
+(`\]`, `\-`, `\^`, `\\`) yields **one** `ClassType::Single`; a shorthand escape
+(`\d`) yields **several** entries pushed at once — the loop's current
+one-`char`-in, one-`ClassType`-out shape doesn't hold. And a shorthand token
+can't be a range endpoint (`[\d-z]`): resolving the escape isn't sufficient,
+because it can resolve to a whole class, which the range lookahead has to
+reject explicitly rather than misread. Also still open: is `\d` ASCII-only or
+Unicode-aware? PCRE says ASCII, Rust's `regex` says Unicode.
 
 ### Lesson 7 — search, spans, captures (next)
 
