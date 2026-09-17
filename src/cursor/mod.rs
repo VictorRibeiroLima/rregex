@@ -8,6 +8,13 @@ pub struct OverFlowResult {
     pub offset: usize,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum EscapedResult {
+    None,
+    Some(char),
+    Escaped(char),
+}
+
 impl OverFlowResult {
     #[allow(dead_code)]
     pub fn is_err(&self) -> bool {
@@ -37,6 +44,24 @@ impl Cursor {
             return None;
         }
         Some(self.input[self.pos])
+    }
+
+    pub fn peek_escaped(&self) -> EscapedResult {
+        self.peek_escaped_at(0)
+    }
+
+    pub fn peek_escaped_at(&self, offset: usize) -> EscapedResult {
+        match self.peek_at(offset) {
+            None => EscapedResult::None,
+            Some('\\') => {
+                if let Some(next_char) = self.peek_at(offset + 1) {
+                    EscapedResult::Escaped(next_char)
+                } else {
+                    EscapedResult::Some('\\')
+                }
+            }
+            Some(c) => EscapedResult::Some(c),
+        }
     }
 
     pub fn peek_at(&self, offset: usize) -> Option<char> {
@@ -177,7 +202,7 @@ impl Iterator for Cursor {
 #[cfg(test)]
 mod test {
 
-    use crate::cursor::Cursor;
+    use crate::cursor::{Cursor, EscapedResult};
 
     #[test]
     fn test_peek_number() {
@@ -255,5 +280,28 @@ mod test {
         let result = cursor.peek_number().unwrap();
         assert_eq!(result.unwrap(), 12);
         assert_eq!(result.offset, 2);
+    }
+
+    #[test]
+    fn test_peek_escaped() {
+        let input = r"\n";
+        let cursor = Cursor::new(input);
+        let result = cursor.peek_escaped();
+        assert_eq!(result, EscapedResult::Escaped('n'));
+
+        let input = r"\\";
+        let cursor = Cursor::new(input);
+        let result = cursor.peek_escaped();
+        assert_eq!(result, EscapedResult::Escaped('\\'));
+
+        let input = r"\";
+        let cursor = Cursor::new(input);
+        let result = cursor.peek_escaped();
+        assert_eq!(result, EscapedResult::Some('\\'));
+
+        let input = r"abc";
+        let cursor = Cursor::new(input);
+        let result = cursor.peek_escaped();
+        assert_eq!(result, EscapedResult::Some('a'));
     }
 }
