@@ -301,3 +301,12 @@ fn a_higher_priority_short_branch_must_not_hide_a_full_match() {
     // The reverse ordering already works, which is why this went unnoticed.
     assert!(matches("ab|a", "ab"));
 }
+
+#[test]
+fn an_escaped_closing_bracket_class_matches_the_bracket_not_the_backslash() {
+    // End to end: parse -> compile -> simulate. The parser tests only pin
+    // the tree; this pins what the tree means.
+    assert!(matches("[\\]]", "]"));
+    assert!(!matches("[\\]]", "\\"));
+    assert!(!matches("[\\]]", "\\]"));
+}

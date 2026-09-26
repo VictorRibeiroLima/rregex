@@ -681,7 +681,7 @@ shapes:
 
 - **silently wrong tree** — `[\]]` → `Concat(Class({\\}), Literal(']'))`, and
   `[\-]`/`[\^]` gain a spurious `Single('\\')`.
-- **wrongly rejects** — `[a-\]]` → `InvalidRange('a', '\\')`, the backslash
+- **wrongly rejects** — `[a-\{]` → `InvalidRange('a', '\\')`, the backslash
   eaten as the range endpoint. Hence: an escape must resolve to its char
   *before* range detection runs.
 - **wrongly accepts** — `[abc\]` is an unterminated class but parses as

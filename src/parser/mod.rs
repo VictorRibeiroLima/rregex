@@ -1,5 +1,5 @@
 use crate::{
-    cursor::{Cursor, OverFlowResult},
+    cursor::{Cursor, EscapedResult, OverFlowResult},
     parser::{
         ast::{AnchorKind, Ast, ClassSet, ClassType},
         bounded_repetition::BoundedRepetition,
@@ -323,50 +323,78 @@ fn parse_class(cursor: &mut Cursor) -> Result<Ast, ParserError> {
     let mut negation = false;
     let mut start = true;
     loop {
-        let peek = cursor.peek();
-        match peek {
-            None => return Err(ParserError::UnexpectedEndOfInput),
-            Some(']') => return Ok(Ast::Class(class, negation)),
-            Some(c) => {
+        let peek = cursor.peek_escaped();
+        let mut escaped = false;
+        let c = match peek {
+            EscapedResult::None => return Err(ParserError::UnexpectedEndOfInput),
+            EscapedResult::Some('\\') => return Err(ParserError::UnexpectedEndOfInput),
+            EscapedResult::Some(']') => return Ok(Ast::Class(class, negation)),
+
+            EscapedResult::Some(c) => {
                 cursor.next();
-                if c == '^' && start {
-                    negation = true;
-                    start = false;
-                    continue;
-                }
-                start = false;
-
-                let n = match cursor.peek() {
-                    None | Some(']') => {
-                        class.push(ClassType::Single(c));
-                        continue;
-                    }
-                    Some(n) => n,
-                };
-
-                if n != '-' {
-                    class.push(ClassType::Single(c));
-                    continue;
-                }
-
-                let n2 = match cursor.peek_at(1) {
-                    None | Some(']') => {
-                        class.push(ClassType::Single(c));
-
-                        continue;
-                    }
-                    Some(n) => n,
-                };
-                //We are at a range consume the tokens
-                cursor.next();
-                cursor.next();
-
-                if c > n2 {
-                    return Err(ParserError::InvalidRange(c, n2));
-                }
-                class.push(ClassType::Range(c, n2));
+                c
             }
+            EscapedResult::Escaped(c) => {
+                escaped = true;
+                cursor.next();
+                cursor.next();
+                c
+            }
+        };
+        if c == '^' && start && !escaped {
+            negation = true;
+            start = false;
+            continue;
         }
+        start = false;
+
+        let mut offset = 0;
+        let n = match cursor.peek_escaped() {
+            EscapedResult::Some('\\') => return Err(ParserError::UnexpectedEndOfInput),
+            EscapedResult::None | EscapedResult::Some(']') => {
+                class.push(ClassType::Single(c));
+                continue;
+            }
+            EscapedResult::Some(n) => {
+                escaped = false;
+                offset += 1;
+                n
+            }
+            EscapedResult::Escaped(n) => {
+                escaped = true;
+                offset += 2;
+                n
+            }
+        };
+
+        if n != '-' || escaped {
+            class.push(ClassType::Single(c));
+            continue;
+        }
+
+        let n2 = match cursor.peek_escaped_at(offset) {
+            EscapedResult::Some('\\') => return Err(ParserError::UnexpectedEndOfInput),
+            EscapedResult::None | EscapedResult::Some(']') => {
+                class.push(ClassType::Single(c));
+
+                continue;
+            }
+            EscapedResult::Some(n) => {
+                offset += 1;
+                n
+            }
+            EscapedResult::Escaped(n) => {
+                offset += 2;
+                n
+            }
+        };
+        //We are at a range consume the tokens
+        cursor.move_to(offset);
+
+        if c > n2 {
+            return Err(ParserError::InvalidRange(c, n2));
+        }
+        class.push(ClassType::Range(c, n2));
     }
 }
 
@@ -377,5 +405,6 @@ fn check_lazy(cursor: &Cursor, offset: &mut usize) -> bool {
     }
     return false;
 }
+
 #[cfg(test)]
 mod tests;
