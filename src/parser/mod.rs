@@ -3,11 +3,13 @@ use crate::{
     parser::{
         ast::{AnchorKind, Ast, ClassSet, ClassType},
         bounded_repetition::BoundedRepetition,
+        consts::{ESCAPED_D, ESCAPED_S, ESCAPED_W, ESCAPED_d, ESCAPED_s, ESCAPED_w},
     },
 };
 
 pub mod ast;
 pub mod bounded_repetition;
+mod consts;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParserError {
@@ -297,11 +299,7 @@ fn parse_atom(cursor: &mut Cursor) -> Result<Ast, ParserError> {
         }
         Some('\\') => {
             cursor.next();
-            let escaped = cursor.next();
-            match escaped {
-                None => Err(ParserError::UnexpectedEndOfInput),
-                Some(c) => Ok(Ast::Literal(c)),
-            }
+            return parse_slash(cursor);
         }
         Some('^') => {
             cursor.next();
@@ -398,6 +396,30 @@ fn parse_class(cursor: &mut Cursor) -> Result<Ast, ParserError> {
     }
 }
 
+fn parse_slash(cursor: &mut Cursor) -> Result<Ast, ParserError> {
+    let escaped = cursor.next();
+    let c = match escaped {
+        None => return Err(ParserError::UnexpectedEndOfInput),
+        Some(c) => c,
+    };
+    let special = match check_special_escaped(c) {
+        Some(s) => s,
+        None => {
+            if c == 'n' {
+                return Ok(Ast::Literal('\n'));
+            }
+            if c == 't' {
+                return Ok(Ast::Literal('\t'));
+            }
+            if c == 'r' {
+                return Ok(Ast::Literal('\r'));
+            }
+            return Ok(Ast::Literal(c));
+        }
+    };
+    return Ok(Ast::Class(ClassSet::from(special.to_vec()), false));
+}
+
 fn check_lazy(cursor: &Cursor, offset: &mut usize) -> bool {
     if cursor.peek_at(*offset) == Some('?') {
         *offset += 1;
@@ -406,5 +428,16 @@ fn check_lazy(cursor: &Cursor, offset: &mut usize) -> bool {
     return false;
 }
 
+fn check_special_escaped(c: char) -> Option<&'static [ClassType]> {
+    match c {
+        'd' => Some(&ESCAPED_d),
+        'D' => Some(&ESCAPED_D),
+        'w' => Some(&ESCAPED_w),
+        'W' => Some(&ESCAPED_W),
+        's' => Some(&ESCAPED_s),
+        'S' => Some(&ESCAPED_S),
+        _ => None,
+    }
+}
 #[cfg(test)]
 mod tests;

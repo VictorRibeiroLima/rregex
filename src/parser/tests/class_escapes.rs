@@ -136,3 +136,20 @@ fn only_an_unescaped_leading_caret_negates() {
         Ast::Class(ClassSet::from_vec(vec![ClassType::Single('^')]), true)
     );
 }
+
+#[test]
+fn control_char_escapes_can_be_range_endpoints() {
+    // `\t` and `\r` each resolve to one char, so unlike `\d` they are legal
+    // endpoints: '\t'..'\r' is 0x09..0x0D, the contiguous whitespace block
+    // `\s` is built from. The naive "whatever follows `\` is a literal" rule
+    // reads this as 't'..'r' instead -- inverted, since 't' (0x74) > 'r'
+    // (0x72) -- so it fails with InvalidRange until the escapes mean control
+    // chars.
+    assert_eq!(
+        ast("[\\t-\\r]"),
+        Ast::Class(
+            ClassSet::from_vec(vec![ClassType::Range('\t', '\r')]),
+            false
+        )
+    );
+}

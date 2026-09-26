@@ -409,3 +409,47 @@ fn bounded_repetition_fake() {
     assert_eq!(find("a{2,3a}", "aaa"), None);
     assert_eq!(find("a{2,3a}", "a{2,3a}"), Some(7));
 }
+
+#[test]
+fn test_simple_slash_d() {
+    assert_eq!(find("\\d", "1"), Some(1));
+    assert_eq!(find("\\d", "a"), None);
+}
+
+#[test]
+fn test_simple_slash_upper_d() {
+    assert_eq!(find("\\D", "1"), None);
+    assert_eq!(find("\\D", "a"), Some(1));
+}
+
+#[test]
+fn test_simple_slash_w() {
+    assert_eq!(find("\\w", "a"), Some(1));
+    assert_eq!(find("\\w", "1"), Some(1));
+    assert_eq!(find("\\w", "_"), Some(1));
+    assert_eq!(find("\\w", "-"), None);
+}
+
+#[test]
+fn test_simple_slash_upper_w() {
+    assert_eq!(find("\\W", "a"), None);
+    assert_eq!(find("\\W", "1"), None);
+    assert_eq!(find("\\W", "_"), None);
+    assert_eq!(find("\\W", "-"), Some(1));
+}
+
+#[test]
+fn test_simple_slash_s() {
+    assert_eq!(find("\\s", " "), Some(1));
+    assert_eq!(find("\\s", "\t"), Some(1));
+    assert_eq!(find("\\s", "\n"), Some(1));
+    assert_eq!(find("\\s", "a"), None);
+}
+
+#[test]
+fn test_simple_slash_upper_s() {
+    assert_eq!(find("\\S", " "), None);
+    assert_eq!(find("\\S", "\t"), None);
+    assert_eq!(find("\\S", "\n"), None);
+    assert_eq!(find("\\S", "a"), Some(1));
+}

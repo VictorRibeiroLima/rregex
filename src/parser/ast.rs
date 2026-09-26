@@ -35,6 +35,12 @@ pub enum ClassType {
 #[derive(Debug, PartialEq, Eq)]
 pub struct ClassSet(pub Vec<ClassType>);
 
+impl From<Vec<ClassType>> for ClassSet {
+    fn from(vec: Vec<ClassType>) -> Self {
+        ClassSet(vec)
+    }
+}
+
 impl ClassSet {
     pub fn new() -> Self {
         ClassSet(Vec::new())
