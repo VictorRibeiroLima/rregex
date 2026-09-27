@@ -323,7 +323,7 @@ fn parse_class(cursor: &mut Cursor) -> Result<Ast, ParserError> {
     loop {
         let peek = cursor.peek_escaped();
         let mut escaped = false;
-        let c = match peek {
+        let mut c = match peek {
             EscapedResult::None => return Err(ParserError::UnexpectedEndOfInput),
             EscapedResult::Some('\\') => return Err(ParserError::UnexpectedEndOfInput),
             EscapedResult::Some(']') => return Ok(Ast::Class(class, negation)),
@@ -345,6 +345,23 @@ fn parse_class(cursor: &mut Cursor) -> Result<Ast, ParserError> {
             continue;
         }
         start = false;
+
+        if escaped {
+            if c == 'n' {
+                c = '\n';
+            }
+            if c == 't' {
+                c = '\t';
+            }
+            if c == 'r' {
+                c = '\r';
+            }
+            let special = check_special_escaped(c);
+            if let Some(s) = special {
+                class.extend(s);
+                continue;
+            }
+        }
 
         let mut offset = 0;
         let n = match cursor.peek_escaped() {
@@ -370,7 +387,7 @@ fn parse_class(cursor: &mut Cursor) -> Result<Ast, ParserError> {
             continue;
         }
 
-        let n2 = match cursor.peek_escaped_at(offset) {
+        let mut n2 = match cursor.peek_escaped_at(offset) {
             EscapedResult::Some('\\') => return Err(ParserError::UnexpectedEndOfInput),
             EscapedResult::None | EscapedResult::Some(']') => {
                 class.push(ClassType::Single(c));
@@ -378,14 +395,34 @@ fn parse_class(cursor: &mut Cursor) -> Result<Ast, ParserError> {
                 continue;
             }
             EscapedResult::Some(n) => {
+                escaped = false;
                 offset += 1;
                 n
             }
             EscapedResult::Escaped(n) => {
+                escaped = true;
                 offset += 2;
                 n
             }
         };
+        if escaped {
+            if n2 == 'n' {
+                n2 = '\n';
+            }
+            if n2 == 't' {
+                n2 = '\t';
+            }
+            if n2 == 'r' {
+                n2 = '\r';
+            }
+            let special = check_special_escaped(n2);
+            if special.is_some() {
+                //This is not a valid range so we just push the already consumed 'c' and continue
+                class.push(ClassType::Single(c));
+
+                continue;
+            }
+        }
         //We are at a range consume the tokens
         cursor.move_to(offset);
 

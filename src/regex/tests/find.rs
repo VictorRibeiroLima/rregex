@@ -1,6 +1,6 @@
 use crate::regex::Regex;
 
-fn find(pattern: &str, input: &str) -> Option<usize> {
+pub fn find(pattern: &str, input: &str) -> Option<usize> {
     Regex::compile(pattern).unwrap().find(input).unwrap()
 }
 

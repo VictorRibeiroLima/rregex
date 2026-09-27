@@ -1,4 +1,7 @@
-use std::ops::{Deref, DerefMut};
+use std::{
+    borrow::Borrow,
+    ops::{Deref, DerefMut},
+};
 
 use crate::parser::bounded_repetition::BoundedRepetition;
 
@@ -54,6 +57,12 @@ impl ClassSet {
     pub fn push(&mut self, class_type: ClassType) {
         if !self.0.contains(&class_type) {
             self.0.push(class_type);
+        }
+    }
+
+    pub fn extend<V: Borrow<ClassType>, T: IntoIterator<Item = V>>(&mut self, vec: T) {
+        for class_type in vec {
+            self.push(*class_type.borrow());
         }
     }
 }

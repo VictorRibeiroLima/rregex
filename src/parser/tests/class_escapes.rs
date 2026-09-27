@@ -153,3 +153,80 @@ fn control_char_escapes_can_be_range_endpoints() {
         )
     );
 }
+
+#[test]
+fn a_shorthand_on_the_left_of_a_dash_makes_the_dash_literal() {
+    // `\d` is a set, not a char, so it can't open a range. The `-` falls back
+    // to a literal member, same as after a finished range (`[a-c-e]`).
+    assert_eq!(
+        ast("[\\d-a]"),
+        Ast::Class(
+            ClassSet::from_vec(vec![
+                ClassType::Range('0', '9'),
+                ClassType::Single('-'),
+                ClassType::Single('a'),
+            ]),
+            false
+        )
+    );
+}
+
+#[test]
+fn a_shorthand_on_the_right_of_a_dash_makes_the_dash_literal() {
+    // The mirror image: `\d` can't close a range either. Nothing to the left
+    // of the `-` may be lost along the way -- `a` is still a member.
+    assert_eq!(
+        ast("[a-\\d]"),
+        Ast::Class(
+            ClassSet::from_vec(vec![
+                ClassType::Single('a'),
+                ClassType::Single('-'),
+                ClassType::Range('0', '9'),
+            ]),
+            false
+        )
+    );
+}
+
+#[test]
+fn a_caret_after_a_leading_escape_is_a_literal_member() {
+    // `^` only negates as the very first thing in the class. An escape --
+    // shorthand or not -- in first position used up that slot, so a
+    // following `^` is just a member.
+    assert_eq!(
+        ast("[\\d^]"),
+        Ast::Class(
+            ClassSet::from_vec(vec![ClassType::Range('0', '9'), ClassType::Single('^')]),
+            false
+        )
+    );
+    assert_eq!(
+        ast("[\\n^]"),
+        Ast::Class(
+            ClassSet::from_vec(vec![ClassType::Single('\n'), ClassType::Single('^')]),
+            false
+        )
+    );
+}
+
+#[test]
+fn shorthand_entries_are_deduplicated_like_any_other() {
+    // ClassSet never holds the same entry twice, whichever path pushed it.
+    let digit = Ast::Class(ClassSet::from_vec(vec![ClassType::Range('0', '9')]), false);
+    assert_eq!(ast("[\\d\\d]"), digit);
+    assert_eq!(ast("[0-9\\d]"), digit);
+    assert_eq!(ast("[\\d0-9]"), digit);
+    // `\w` already contains '0'..'9', so the `\d` after it adds nothing.
+    assert_eq!(
+        ast("[\\w\\d]"),
+        Ast::Class(
+            ClassSet::from_vec(vec![
+                ClassType::Range('a', 'z'),
+                ClassType::Range('A', 'Z'),
+                ClassType::Range('0', '9'),
+                ClassType::Single('_'),
+            ]),
+            false
+        )
+    );
+}
