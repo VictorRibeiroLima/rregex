@@ -57,6 +57,8 @@ Don't relitigate these without being asked.
 | Match semantics | **Leftmost-first**, not POSIX leftmost-longest | It is what every mainstream engine does and what intuition expects. `Split(body, exit)` order is greediness; the swap is `*?`. |
 | Class negation | **One `bool` on the whole class**, never per-item | De Morgan's: the complement of a union is the intersection of complements. Invert once, at the end. |
 | Possessive quantifiers / atomic groups | **Not implemented, and can't be** | They require discarding a live thread because of an earlier commitment, so a thread's fate would depend on more than `(state, position)` — the same invariant that forbids backreferences. Consequence: `+` after a quantifier is never a possessive suffix here, just ordinary stacking (`a{3,4}++` is `Plus(Plus(…))`), a deliberate divergence from PCRE. |
+| Shorthand classes | **ASCII** (`\w` = `[a-zA-Z0-9_]`) | PCRE's default. Unicode-aware `\w` needs Unicode tables; revisit with case folding. |
+| Shorthand next to `-` in a class | **`-` becomes a literal** (`[\d-a]`, `[a-\d]` = `{…, -, …}`) | Permissive, like `[a-c-e]` and empty branches. PCRE/Python error instead; Perl and non-`u` JS agree with us. |
 
 ## Progress
 
@@ -66,7 +68,7 @@ Don't relitigate these without being asked.
 
 - [src/parser/mod.rs](src/parser/mod.rs) — `ParserError` and the parse functions
 - [src/parser/ast.rs](src/parser/ast.rs) — `Ast`, `ClassType` (added in Lesson 5)
-- [src/parser/cursor.rs](src/parser/cursor.rs) — position cursor over `Vec<char>`
+- [src/cursor/mod.rs](src/cursor/mod.rs) — position cursor over `Vec<char>`
 
 **The grammar** (precedence falls out of the nesting; extended in Lesson 5):
 
@@ -569,8 +571,8 @@ complements, so per-item `NegatedSingle`/`NegatedRange` made `[^abc]` say `'a'`
 inverting once at the end (same "illegal states unrepresentable" move as
 `ValidProgram`). A second bug in the same parser: the `start` flag (tracks
 whether `^` can still negate) only reset on fall-through, not on every
-`continue`, so `[a^]` parsed as negated instead of `{a, ^}`. `\` escapes are
-deliberately naive — consume the next char as a literal, no `\d`/`\w`/`\s` yet.
+`continue`, so `[a^]` parsed as negated instead of `{a, ^}`. (Escapes, naive
+here, became real in Lesson 6.)
 
 **The empty class `[]`/`[^]` is legal by decision, not accident.** No code
 changed: the union-scan-then-negate-once logic already gives the right answer
@@ -670,48 +672,67 @@ runs drop glue, but keeps the allocation.)
   entirely and their cost shows up under `RawVec`/`malloc`, while the parser's
   recursive functions survive as named frames because recursion blocks inlining.
 
-### Lesson 6 — class escapes, then `\d`/`\w`/`\s` and `\n`/`\t` (next)
+### Lesson 6 — escapes inside classes, shorthand classes (complete)
 
-**Opens with a bug fix, not a feature.** `parse_class` has no `\` handling at
-all — it never calls into `parse_atom`'s escape branch, so every char inside
-`[...]` is read as itself, backslash included. Fixing it is a prerequisite for
-the shorthand work below, not optional cleanup. Four red tests pin it (grep
-`class escapes` in [src/parser/tests.rs](src/parser/tests.rs)), three failure
-shapes:
+**Built:** `\` handling inside `[...]`, `\d \w \s \D \W \S`, and `\n \t \r`, both
+inside and outside classes. No new AST variants; `machine/` and `regex/`
+untouched — everything bottoms out in `ClassType` entries or `Literal`.
 
-- **silently wrong tree** — `[\]]` → `Concat(Class({\\}), Literal(']'))`, and
-  `[\-]`/`[\^]` gain a spurious `Single('\\')`.
-- **wrongly rejects** — `[a-\{]` → `InvalidRange('a', '\\')`, the backslash
-  eaten as the range endpoint. Hence: an escape must resolve to its char
-  *before* range detection runs.
-- **wrongly accepts** — `[abc\]` is an unterminated class but parses as
-  `{a,b,c,\\}`.
+- [src/cursor/mod.rs](src/cursor/mod.rs) — `peek_escaped`/`peek_escaped_at`,
+  `EscapedResult { None, Some(c), Escaped(c) }`
+- [src/parser/consts.rs](src/parser/consts.rs) — `ESCAPED_d` … `ESCAPED_S`
+- [src/parser/mod.rs](src/parser/mod.rs) — `parse_slash`,
+  `check_special_escaped`, escape-aware `parse_class`
+- [src/parser/tests/](src/parser/tests/) (split by category),
+  [src/regex/tests/shorthand.rs](src/regex/tests/shorthand.rs)
 
-`[\\]` is the trap — already correct, but only because both raw backslashes
-push the same `Single` and `ClassSet::push` dedups. It passes either side of
-the fix, so it is no regression signal.
+**The bug that opened it:** `parse_class` never handled `\`, so every char in
+`[...]` was read raw. Three failure shapes: silently wrong tree (`[\]]` →
+`Concat(Class({\\}), Literal(']'))`), wrongly rejects (`[a-\{]` →
+`InvalidRange('a','\\')`), wrongly accepts (`[abc\]`). `parse_class` was the
+only sub-grammar reading raw chars *inside* an atom; every other raw-char peek
+runs between atoms, after `parse_atom`'s `\` branch has consumed the escape.
 
-Audited: `parse_class` is the **only** place with this gap. Every other
-raw-char inspection (`parse_concat`'s stop set, `parse_repetition`'s
-quantifier peek, `check_lazy`, `eat('|')`, `{n,m}`'s lookahead) runs *between*
-atoms, by which point `parse_atom`'s `\` branch has consumed both chars of the
-escape — so `a\|b`, `a\{2}`, `a{2}\?`, `a\*?` and `(a\))` are already right.
-`parse_class` is the one sub-grammar reading raw chars *inside* an atom.
+**Concepts covered:**
 
-**Then the shorthand, which rides on the same new branch.** No new AST
-variants: `\d`/`\w`/`\s` (and negated uppercase forms) desugar to `Ast::Class`,
-`\n`/`\t` to `Ast::Literal`. `machine/` and `regex/` stay untouched — the
-expansion bottoms out in `ClassType::Range`/`Single` entries in the same
-`ClassSet`, exactly what those layers already consume.
+- **An escape must resolve before range detection, on both endpoints** — and
+  resolving isn't enough, because an escape resolves to either one char
+  (`\t`, `\]`: a legal endpoint) or a set (`\d`: not one). The loop's
+  one-char-in, one-entry-out shape stops holding.
+- **Uppercase shorthands are spelled as their complement** (`\D` =
+  `'\0'..'/'` ∪ `':'..'\u{10FFFF}'`), because negation is one bool per class
+  and `[\Da]` can't flip it per item. The same constant serves outside a class
+  with `negated = false`. The surrogate gap needs no care — it holds no `char`.
+- **A dangling `\` escapes nothing** — it is end of input, not a literal
+  backslash, in both grammars.
+- `/…/i` is host-language delimiter-plus-flag syntax (JS/Perl), not regex; a
+  string-pattern engine sees a literal `/`. Flags would be `(?i)` or a compile
+  option, and case-insensitivity fits the same expand-at-parse approach.
 
-Two behaviors that branch must keep apart: escaping a class metacharacter
-(`\]`, `\-`, `\^`, `\\`) yields **one** `ClassType::Single`; a shorthand escape
-(`\d`) yields **several** entries pushed at once — the loop's current
-one-`char`-in, one-`ClassType`-out shape doesn't hold. And a shorthand token
-can't be a range endpoint (`[\d-z]`): resolving the escape isn't sufficient,
-because it can resolve to a whole class, which the range lookahead has to
-reject explicitly rather than misread. Also still open: is `\d` ASCII-only or
-Unicode-aware? PCRE says ASCII, Rust's `regex` says Unicode.
+**Bugs that surfaced:**
+
+- A lone trailing `\` reported by `peek_escaped` as `Some('\\')` — a disguised
+  literal that only failed correctly by accident, until `[a-\` made it an
+  endpoint.
+- The `start` flag not reset before the shorthand branch's `continue`, so
+  `[\d^]` negated — **the same bug as Lesson 5's `[a^]`**: a `continue` that
+  skips a reset.
+- `class.0.extend(…)` bypassing `ClassSet::push`'s dedup. `DerefMut` to `Vec`
+  makes this silent: without an inherent `extend`, the call resolves to
+  `Vec::extend`.
+- The right-endpoint shorthand path `continue`d without pushing the
+  already-consumed left char, so `[a-\d]` lost the `a`.
+- My own test spec was wrong: `[a-\]]` expected `Range('a',']')`, but `']'` is
+  0x5D < `'a'`. Check code points before writing a range expectation.
+
+**Teaching notes:**
+
+- Victor did this lesson largely alone from a spec table (what each escape
+  becomes in memory). The shorthand tables are data, not engine logic — he
+  said so, and was right; give such tables directly instead of Socratically.
+- Reviewing his diffs and naming the failing input (`[\d^]`, `[a-\d]`)
+  without the patch worked; he fixed each before the test was written.
+
 
 ### Lesson 7 — search, spans, captures (next)
 
